@@ -14,16 +14,18 @@ Gera:
     visualizacao_web/secao_interativa.html
 """
 import base64
+import math
 from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 import rasterio.features
 from affine import Affine
 from plotly.subplots import make_subplots
 from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator, griddata
-from shapely.geometry import Point, shape as shapely_shape
+from shapely.geometry import LineString, Point, shape as shapely_shape
 from shapely.geometry.polygon import orient
 from shapely.ops import unary_union
 
@@ -31,6 +33,15 @@ BASE = Path(r"C:\Users\thuba\Desktop\Mestrado\1_Modelo_3D_Taio")
 TOPO_NPY = BASE / "dados_entrada" / "topografia_drone" / "topografia_xyz.npy"
 POLIGONO_REFERENCIA = BASE.parent / "2_Banco_de_Dados" / "dados_base" / "poligon_intrusiva.shp"
 POLIGONOS_CPRM_GEOJSON = BASE.parent / "2_Banco_de_Dados" / "saida_processada" / "formacoes_cprm_poligonos.geojson"
+OSM_RIOS_GEOJSON = BASE.parent / "2_Banco_de_Dados" / "saida_processada" / "osm_rios.geojson"
+OSM_ESTRADAS_GEOJSON = BASE.parent / "2_Banco_de_Dados" / "saida_processada" / "osm_estradas.geojson"
+OSM_LUGARES_GEOJSON = BASE.parent / "2_Banco_de_Dados" / "saida_processada" / "osm_lugares.geojson"
+PONTOS_CAMPO_GPKG = (
+    BASE.parent / "2_Banco_de_Dados" / "Unificação" / "GPKG_Novos" / "pontos_unificados_completo.gpkg"
+)
+PONTOS_ESTRUTURAIS_GPKG = (
+    BASE.parent / "2_Banco_de_Dados" / "Unificação" / "GPKG_Novos" / "nuvem_pontos_direcoes.gpkg"
+)
 LOGO_PATH = Path(__file__).parent / "assets" / "logo_gstech.jpg"
 OUT_HTML = Path(__file__).parent / "secao_interativa.html"
 
@@ -85,8 +96,31 @@ TREND_A, TREND_B = 0.01034, -0.00025
 TREND_X0, TREND_Y0 = 592300.0, 7015058.8
 Z_REF_TILT = 1053.5  # ancora o plano em boundary(prof=350) = 703.5 (media real do contato Teresina/Serra Alta)
 COR_SILL = "#A63D2F"
-COR_DIQUE = "#2B2B2B"
+COR_DIQUE = "#1B4332"  # verde escuro
 COR_QUATERNARIO = "#D9CB82"
+# pontos de campo (catalogo unificado, ver PONTOS_CAMPO_GPKG) -- mesma paleta
+# das formacoes/sill/dique quando a litologia bate, cinza neutro pro resto.
+CORES_LITOLOGIA_CAMPO = {
+    "sill_diabasio": COR_SILL, "sill_diabasio_cprm": COR_SILL,
+    "dique": COR_DIQUE, "dique_cprm": COR_DIQUE,
+    "encaixante_teresina": CORES_CAMADAS[0], "encaixante_serra_alta": CORES_CAMADAS[1],
+    "encaixante_irati": CORES_CAMADAS[2], "encaixante_palermo": CORES_CAMADAS[3],
+    "encaixante_rio_bonito": CORES_CAMADAS[4],
+}
+COR_LITOLOGIA_PADRAO = "#999999"
+# dados estruturais (fraturas/falhas/diques inferidos/acamamento etc., ver
+# PONTOS_ESTRUTURAIS_GPKG) -- cor por classificacao, cobre todas as categorias
+# do catalogo (nao so fratura_falha, que foi so o pedido inicial do usuario).
+CORES_CLASSIFICACAO_ESTRUTURAL = {
+    "acamamento_sedimentar": "#C9A66B",
+    "fratura_falha": "#D64545",
+    "dique_provavel_relevo_positivo": "#2E7D5B",
+    "dique_confirmado_mapa": COR_DIQUE,
+    "falha_ou_dique_ambiguo_relevo_negativo": "#E8A33D",
+    "contato_sill_encaixante": "#A63D2F",
+    "fabrica_interna_intrusao": "#7B2FFF",
+}
+COR_CLASSIFICACAO_PADRAO = "#999999"
 ESPESSURA_SILL = 400.0
 QUATERNARIO_LIMIAR = 450.0
 QUATERNARIO_ESPESSURA = 30.0
@@ -158,6 +192,27 @@ def banda_toself(dists, topo, base, mask=None):
     x = np.concatenate([dists, dists[::-1]])
     y = np.concatenate([topo, base[::-1]])
     return x, y
+
+
+def linhas_para_scatter_xy(gdf):
+    """Todas as linhas (rios/estradas) de um GeoDataFrame como um unico par
+    x,y pra um Scatter mode='lines' -- cada trecho separado por NaN (mesma
+    logica de sub-caminhos separados usada em poligono_para_scatter_xy/
+    faixas_contiguas). Um trace so, em vez de um por feature, pra nao
+    multiplicar o numero de traces (rios sozinho tem quase 6 mil trechos)."""
+    xs, ys = [], []
+    primeiro = True
+    for geom in gdf.geometry:
+        partes = geom.geoms if hasattr(geom, "geoms") else [geom]
+        for parte in partes:
+            if not primeiro:
+                xs.append(np.nan)
+                ys.append(np.nan)
+            primeiro = False
+            coords = np.array(parte.coords)
+            xs.extend(coords[:, 0])
+            ys.extend(coords[:, 1])
+    return np.array(xs), np.array(ys)
 
 
 def poligono_para_scatter_xy(geom):
@@ -252,6 +307,55 @@ def amostrar_linha(cx_linha, cy_linha, dx, dy, s_vals, elevacao, sill_geom, diqu
     return dados
 
 
+def calcular_cruzamentos(xs, ys, gdf, sindex, elevacao):
+    """Pontos onde a linha de corte atual (xs,ys, ja amostrada) cruza as
+    features de um GeoDataFrame (rios ou estradas) -- usa o indice espacial
+    (sindex) pra so testar intersecao real contra os poucos candidatos perto
+    da linha, nao contra todas as milhares de features. Devolve lista de
+    (distancia_km_no_perfil, elevacao_real, nome) -- so cruzamentos com nome
+    real no OSM (sem nome vira pin demais, poluia o grafico -- usuario testou
+    "todos" e pediu pra voltar a so nomeados)."""
+    linha = LineString(zip(xs, ys))
+    candidatos = list(sindex.query(linha))
+    vistos = set()
+    cruzamentos = []
+    for i in candidatos:
+        geom = gdf.geometry.iloc[i]
+        inter = linha.intersection(geom)
+        if inter.is_empty:
+            continue
+        pontos = list(inter.geoms) if hasattr(inter, "geoms") else [inter]
+        for pt in pontos:
+            if pt.geom_type != "Point":
+                continue
+            # posicao ao longo do perfil: projeta o ponto de intersecao no
+            # mesmo parametro usado pra "dists" (distancia real desde xs[0]/ys[0])
+            s = math.hypot(pt.x - xs[0], pt.y - ys[0])
+            s_km = s / 1000
+            nome = gdf["name"].iloc[i] if "name" in gdf.columns else None
+            if not (isinstance(nome, str) and nome.strip()):
+                continue  # so cruzamentos com nome -- sem nome ficava poluido demais (todo trecho vira pin)
+            chave = (round(s_km, 2), nome)
+            if chave in vistos:
+                continue
+            vistos.add(chave)
+            cruzamentos.append((s_km, float(elevacao(pt.x, pt.y)), nome))
+    cruzamentos.sort(key=lambda c: c[0])
+
+    # funde cruzamentos consecutivos do MESMO rio/estrada que caem muito perto
+    # um do outro -- um curso d'agua sinuoso pode cruzar a linha reta varias
+    # vezes numa curva fechada (poucas centenas de metros), o que duplicava o
+    # mesmo nome empilhado/ilegivel no grafico (bug reportado pelo usuario).
+    # So a distancia importa aqui, nao a elevacao (fica igual/parecida mesmo).
+    LIMIAR_FUSAO_KM = 0.5
+    fundidos = []
+    for c in cruzamentos:
+        if fundidos and fundidos[-1][2] == c[2] and (c[0] - fundidos[-1][0]) < LIMIAR_FUSAO_KM:
+            continue  # mesmo nome, perto do anterior -- mantem so a primeira ocorrencia
+        fundidos.append(c)
+    return fundidos
+
+
 _CHAVES_CAMADAS = [f"camada{k}" for k in range(len(PROFUNDIDADE_CAMADAS) - 1)]
 ORDEM_TRACES = ["linha_mapa"] + _CHAVES_CAMADAS + ["quaternario", "sill", "dique", "terreno"]
 CORES_TRACES = {chave: CORES_CAMADAS[k] for k, chave in enumerate(_CHAVES_CAMADAS)}
@@ -262,8 +366,12 @@ NOMES_TRACES.update({
 })
 # ordem estratigrafica da legenda, igual ao 3D (gerar_visualizador_3d.py): deposito
 # quaternario, depois sill/dique, depois as 5 formacoes sedimentares reais.
-LEGENDRANK_TRACES = {"quaternario": 1, "sill": 2, "dique": 3}
-LEGENDRANK_TRACES.update({chave: 4 + k for k, chave in enumerate(_CHAVES_CAMADAS)})
+# ordem da legenda: ponto (localidades) -> linha (rios/estradas) -> poligono
+# (deposito/soleira/dique/formacoes), ranks 1-3 reservados pros dois primeiros
+# grupos (ver LEGENDRANK_OSM mais abaixo).
+LEGENDRANK_TRACES = {"quaternario": 4, "sill": 5, "dique": 6}
+LEGENDRANK_TRACES.update({chave: 7 + k for k, chave in enumerate(_CHAVES_CAMADAS)})
+LEGENDRANK_OSM = {"lugares": 1, "rios": 2, "estradas": 3}
 
 
 def main():
@@ -295,15 +403,35 @@ def main():
             t_vals=t_vals,
         ))
 
+    gdf_rios_cx = gpd.read_file(OSM_RIOS_GEOJSON) if OSM_RIOS_GEOJSON.exists() else None
+    gdf_estradas_cx = gpd.read_file(OSM_ESTRADAS_GEOJSON) if OSM_ESTRADAS_GEOJSON.exists() else None
+
     print(f"Pre-calculando {len(ANGULOS)} angulos, passo de {PASSO_POSICAO:.0f}m...")
     todas_secoes = []
+    todas_pins_rios = []
+    todas_pins_estradas = []
     for info in angulos_info:
         secoes_angulo = []
+        pins_rios_angulo = []
+        pins_estradas_angulo = []
         for t in info["t_vals"]:
             cx_linha, cy_linha = CX + t * info["px"], CY + t * info["py"]
-            secoes_angulo.append(amostrar_linha(cx_linha, cy_linha, info["dx"], info["dy"], info["s_vals"],
-                                                  elevacao, sill_geom, dique_geom))
+            secao = amostrar_linha(cx_linha, cy_linha, info["dx"], info["dy"], info["s_vals"],
+                                    elevacao, sill_geom, dique_geom)
+            secoes_angulo.append(secao)
+            xs_linha = cx_linha + info["s_vals"] * info["dx"]
+            ys_linha = cy_linha + info["s_vals"] * info["dy"]
+            if gdf_rios_cx is not None:
+                pins_rios_angulo.append(calcular_cruzamentos(xs_linha, ys_linha, gdf_rios_cx, gdf_rios_cx.sindex, elevacao))
+            else:
+                pins_rios_angulo.append([])
+            if gdf_estradas_cx is not None:
+                pins_estradas_angulo.append(calcular_cruzamentos(xs_linha, ys_linha, gdf_estradas_cx, gdf_estradas_cx.sindex, elevacao))
+            else:
+                pins_estradas_angulo.append([])
         todas_secoes.append(secoes_angulo)
+        todas_pins_rios.append(pins_rios_angulo)
+        todas_pins_estradas.append(pins_estradas_angulo)
 
     n_pos_inicial = len(angulos_info[0]["t_vals"])
     inicial = todas_secoes[0][n_pos_inicial // 2]
@@ -353,6 +481,153 @@ def main():
         ), row=1, col=1)
     idx_geo_mapa_fim = idx_geo_mapa_inicio + n_geo_mapa - 1
 
+    # camadas de referencia do OpenStreetMap (rios, estradas, localidades) --
+    # depois da geologia (desenham por cima da cor do terreno) e antes da
+    # linha do perfil (que precisa continuar visivel por cima de tudo no
+    # mapa). Um toggle so ("OSM: ON/OFF"), independente do modo de cor.
+    idx_osm_inicio = len(fig.data)
+    if OSM_RIOS_GEOJSON.exists():
+        gdf_rios = gpd.read_file(OSM_RIOS_GEOJSON)
+        rx, ry = linhas_para_scatter_xy(gdf_rios)
+        fig.add_trace(go.Scatter(
+            x=rx, y=ry, mode="lines", line=dict(color="#2E6F95", width=1),
+            name="Rios (OSM)", showlegend=True, visible=False, hoverinfo="none",
+            legendrank=LEGENDRANK_OSM["rios"], legendgroup="rios",
+        ), row=1, col=1)
+    if OSM_ESTRADAS_GEOJSON.exists():
+        gdf_estradas = gpd.read_file(OSM_ESTRADAS_GEOJSON)
+        rx, ry = linhas_para_scatter_xy(gdf_estradas)
+        fig.add_trace(go.Scatter(
+            x=rx, y=ry, mode="lines", line=dict(color="#4A4A4A", width=1),
+            name="Estradas (OSM)", showlegend=True, visible=False, hoverinfo="none",
+            legendrank=LEGENDRANK_OSM["estradas"], legendgroup="estradas",
+        ), row=1, col=1)
+    # localidades: sem rotulo permanente no mapa (usuario pediu mapa sem
+    # rotulo), mas ganham um marcador GRANDE/em destaque (estrela dourada) --
+    # o nome do municipio so no hover, pra nao poluir mas ainda ficar visivel
+    # e reconhecivel de cara. Mesmo legendgroup da versao "pin" da secao (nao
+    # duplica entrada na legenda, so essa e a da secao ligam/desligam juntas).
+    localidades_dados = []
+    if OSM_LUGARES_GEOJSON.exists():
+        gdf_lugares = gpd.read_file(OSM_LUGARES_GEOJSON)
+        localidades_dados = list(zip(gdf_lugares["name"], gdf_lugares.geometry.x, gdf_lugares.geometry.y))
+        fig.add_trace(go.Scatter(
+            x=[x for _, x, _ in localidades_dados], y=[y for _, _, y in localidades_dados],
+            mode="markers", marker=dict(size=14, color=MARCA_ROXO, symbol="triangle-down",
+                                          line=dict(color=MARCA_CINZA_CLARO, width=1.5)),
+            text=[nome for nome, _, _ in localidades_dados], hoverinfo="text",
+            showlegend=False, visible=False, legendgroup="lugares",
+        ), row=1, col=1)
+
+    # rios/estradas NAO viram rotulo no mapa (usuario pediu mapa sem rotulo)
+    # -- em vez disso ficam disponiveis pro JS projetar como "pin" na SECAO
+    # (row=1,col=2): uma linha condutora fina subindo da topografia real ate
+    # um pouco acima dela, com o marcador+nome na ponta (estilo pin de
+    # mapa). Localidades sao projetadas continuamente (qualquer deslocamento/
+    # angulo, ver atualizarPins); rios/estradas usam cruzamento real da linha
+    # de corte (precomputado por posicao em calcular_cruzamentos, so existe
+    # nos PASSO_POSICAO discretos). 2 traces por tipo (linha condutora +
+    # marcador/texto), todas comecam vazias, JS preenche no load e a cada
+    # mudanca de angulo/posicao.
+    ESTILO_PIN = {
+        "lugares": dict(cor=MARCA_ROXO, simbolo="triangle-down"),
+        "rios": dict(cor="#2E6F95", simbolo="circle"),
+        "estradas": dict(cor="#4A4A4A", simbolo="square"),
+    }
+    idx_pin_traces = {}
+    for tipo in ("lugares", "rios", "estradas"):
+        estilo = ESTILO_PIN[tipo]
+        idx_pin_traces[f"{tipo}_linha"] = len(fig.data)
+        fig.add_trace(go.Scatter(
+            x=[], y=[], mode="lines", line=dict(color=estilo["cor"], width=1.5, dash="dot"),
+            showlegend=False, visible=False, hoverinfo="none", legendgroup=tipo,
+        ), row=1, col=2)
+        idx_pin_traces[f"{tipo}_marcador"] = len(fig.data)
+        fig.add_trace(go.Scatter(
+            x=[], y=[], mode="markers+text", textposition="top center",
+            textfont=dict(size=9, color=MARCA_CINZA_CLARO, family=MARCA_FONTE),
+            marker=dict(color=estilo["cor"], symbol=estilo["simbolo"], line=dict(color=MARCA_CINZA_CLARO, width=1)),
+            name={"lugares": "Localidades (OSM)", "rios": "Rios (OSM)", "estradas": "Estradas (OSM)"}[tipo],
+            showlegend=(tipo == "lugares"), visible=False, hoverinfo="none",
+            legendrank=LEGENDRANK_OSM[tipo], legendgroup=tipo,
+        ), row=1, col=2)
+    idx_osm_fim = len(fig.data) - 1
+
+    # pontos de campo (catalogo unificado, 308 pontos reais medidos em campo) --
+    # no mapa em planta (coloridos por litologia_padronizada, popup no hover) E
+    # como "pin" na SECAO (projetados na linha de corte atual, mesmo esquema
+    # das localidades OSM -- ver atualizarPins). Toggle proprio ("Campo:
+    # ON/OFF"), independente do OSM.
+    idx_pontos_campo = None
+    idx_campo_pin_linha = None
+    idx_campo_pin_marcador = None
+    campo_dados_secao = []
+    if PONTOS_CAMPO_GPKG.exists():
+        gdf_campo = gpd.read_file(PONTOS_CAMPO_GPKG)
+        cores_campo = [CORES_LITOLOGIA_CAMPO.get(lit, COR_LITOLOGIA_PADRAO) for lit in gdf_campo["litologia_padronizada"]]
+        hover_campo = [
+            f"<b>{row.ponto_id}</b> ({row.id_original})<br>"
+            f"Litologia: {row.litologia_padronizada}<br>"
+            f"Tipo: {row.tipo_ponto}<br>"
+            f"Qualidade: {row.qualidade_dado}<br>"
+            f"Z: {row.Z_m:.0f} m<br>"
+            f"{(row.descricao_campo or '')[:120]}"
+            for row in gdf_campo.itertuples()
+        ]
+        idx_pontos_campo = len(fig.data)
+        fig.add_trace(go.Scatter(
+            x=gdf_campo.geometry.x, y=gdf_campo.geometry.y, mode="markers",
+            marker=dict(size=6, color=cores_campo, line=dict(color=MARCA_CINZA_CLARO, width=0.5)),
+            text=hover_campo, hoverinfo="text",
+            name="Pontos de Campo", showlegend=False, visible=False, legendgroup="campo",
+        ), row=1, col=1)
+        campo_dados_secao = [
+            (row.ponto_id, row.geometry.x, row.geometry.y,
+             CORES_LITOLOGIA_CAMPO.get(row.litologia_padronizada, COR_LITOLOGIA_PADRAO), hover)
+            for row, hover in zip(gdf_campo.itertuples(), hover_campo)
+        ]
+        idx_campo_pin_linha = len(fig.data)
+        fig.add_trace(go.Scatter(
+            x=[], y=[], mode="lines", line=dict(color=MARCA_CINZA_CLARO, width=1, dash="dot"),
+            showlegend=False, visible=False, hoverinfo="none", legendgroup="campo",
+        ), row=1, col=2)
+        idx_campo_pin_marcador = len(fig.data)
+        fig.add_trace(go.Scatter(
+            x=[], y=[], mode="markers+text", textposition="top center",
+            textfont=dict(size=9, color=MARCA_CINZA_CLARO, family=MARCA_FONTE),
+            marker=dict(symbol="diamond", line=dict(color=MARCA_CINZA_CLARO, width=1)),
+            name="Pontos de Campo", showlegend=True, visible=False, hoverinfo="text",
+            legendrank=0, legendgroup="campo",
+        ), row=1, col=2)
+
+    # dados estruturais -- duas categorias: "fratura_falha" (dado de campo,
+    # tem dip medido de verdade) e "falha_ou_dique_ambiguo_relevo_negativo"
+    # (lineamento de satelite, so azimute, dip_deg sempre NaN -- ja
+    # documentado no projeto). Como nem toda linha tem mergulho confiavel,
+    # NAO usa o esquema de "pin" com balao inclinado por mergulho -- em vez
+    # disso e um risco vertical fino (preto) cortando a secao inteira, com um
+    # simbolo de falha (X) numa altura fixa, na posicao onde a linha de corte
+    # atual cruza o ponto/lineamento.
+    CLASSIFICACOES_ESTRUTURAL_ALVO = ["falha_ou_dique_ambiguo_relevo_negativo", "fratura_falha"]
+    estrutural_dados_secao = []
+    if PONTOS_ESTRUTURAIS_GPKG.exists():
+        gdf_estrut = gpd.read_file(PONTOS_ESTRUTURAIS_GPKG)
+        gdf_estrut = gdf_estrut[gdf_estrut["classificacao"].isin(CLASSIFICACOES_ESTRUTURAL_ALVO)]
+        for row in gdf_estrut.itertuples():
+            dip_txt = f"{row.dip_deg:.0f}°" if pd.notna(row.dip_deg) else "não medido"
+            hover = (
+                f"<b>{row.ponto_id}</b><br>"
+                f"Classificação: {row.classificacao}<br>"
+                f"Formação: {row.formacao}<br>"
+                f"Azimute: {row.azimute_ou_strike_deg:.0f}°<br>"
+                f"Mergulho: {dip_txt}<br>"
+                f"Fonte: {row.fonte_dado}"
+            )
+            estrutural_dados_secao.append((row.geometry.x, row.geometry.y, hover))
+        # a trace so e adicionada mais abaixo, DEPOIS do loop de ORDEM_TRACES --
+        # senao (ordem de insercao 2D = ordem de desenho) o risco ficava
+        # ESCONDIDO atras das camadas/terreno, que sao desenhados depois dela.
+
     idx_trace_terreno = None
     for chave in ORDEM_TRACES:
         x, y = inicial[chave]
@@ -366,6 +641,28 @@ def main():
                 x=x, y=y, mode="lines", line=dict(width=0), fill="toself",
                 fillcolor=CORES_TRACES[chave], name=NOMES_TRACES[chave], legendrank=LEGENDRANK_TRACES[chave],
             ), row=1, col=2)
+
+    # risco estrutural (fratura/falha + falha-ou-dique de relevo negativo) --
+    # so agora, DEPOIS do loop de ORDEM_TRACES (terreno/camadas/quaternario/
+    # sill/dique), pra desenhar por CIMA deles (ordem de insercao = ordem de
+    # desenho em 2D) -- antes ficava escondido atras das camadas. Duas
+    # traces: o risco vertical fino em si, e um simbolo de falha (X --
+    # duas barras cruzadas, convencao geologica padrao de simbolo de falha
+    # em secao) desenhado numa altura fixa junto a cada linha.
+    idx_estrutural_risco = None
+    idx_estrutural_simbolo = None
+    if estrutural_dados_secao:
+        idx_estrutural_risco = len(fig.data)
+        fig.add_trace(go.Scatter(
+            x=[], y=[], mode="lines", line=dict(color="black", width=1),
+            name="Falha/Fratura", showlegend=True, visible=False,
+            hoverinfo="text", legendgroup="estrutural",
+        ), row=1, col=2)
+        idx_estrutural_simbolo = len(fig.data)
+        fig.add_trace(go.Scatter(
+            x=[], y=[], mode="lines", line=dict(color="black", width=1.2),
+            showlegend=False, visible=False, hoverinfo="none", legendgroup="estrutural",
+        ), row=1, col=2)
 
     # escala grafica + seta norte no mapa em planta -- elementos cartograficos
     # padrao, adicionados por ULTIMO (depois de todas as traces usadas nos
@@ -426,7 +723,15 @@ def main():
         font=dict(size=13, color=MARCA_CINZA_CLARO), xanchor="right",
     )
 
-    n_traces_fixas = 1 + n_geo_mapa  # heatmap + poligonos de geologia (+ quaternario) -- nao mudam entre frames
+    # heatmap + poligonos de geologia (+ quaternario) + camadas OSM + pontos de campo (se existir) --
+    # nenhuma dessas traces muda entre frames, entao os frames de corte comecam logo depois delas.
+    # NOTA: o risco estrutural NAO entra aqui -- suas traces sao adicionadas
+    # DEPOIS do loop de ORDEM_TRACES (de proposito, pra desenhar por cima),
+    # entao ficam fora do intervalo animado por frame, nao antes dele.
+    if idx_pontos_campo is not None:
+        n_traces_fixas = idx_campo_pin_marcador + 1
+    else:
+        n_traces_fixas = idx_osm_fim + 1
     frames = []
     for a, secoes_angulo in enumerate(todas_secoes):
         for p, secao in enumerate(secoes_angulo):
@@ -453,11 +758,11 @@ def main():
 
     COR_PAINEL = "#3A3A46"  # fundo cinza dos graficos (secao + barras), diferente do navy da pagina -- mais facil de ler
     eixo_escuro = dict(gridcolor="#54545f", zerolinecolor="#6a6a75", color=MARCA_CINZA_CLARO)
-    fig.update_xaxes(showticklabels=False, row=1, col=1, range=[X_MIN, X_MAX], scaleanchor="y1", scaleratio=1, constrain="domain")
-    fig.update_yaxes(showticklabels=False, row=1, col=1, range=[Y_MIN, Y_MAX], constrain="domain")
+    fig.update_xaxes(showticklabels=False, row=1, col=1, range=[X_MIN, X_MAX], autorange=False, scaleanchor="y1", scaleratio=1, constrain="domain")
+    fig.update_yaxes(showticklabels=False, row=1, col=1, range=[Y_MIN, Y_MAX], autorange=False, constrain="domain")
     comprimento0_km = (angulos_info[0]["s_vals"][-1] - angulos_info[0]["s_vals"][0]) / 1000
-    fig.update_xaxes(title_text="Distância ao longo da seção (km)", row=1, col=2, range=[0, comprimento0_km], **eixo_escuro)
-    fig.update_yaxes(title_text="Elevação (m)", row=1, col=2, range=[-600, 1150], **eixo_escuro)
+    fig.update_xaxes(title_text="Distância ao longo da seção (km)", row=1, col=2, range=[0, comprimento0_km], autorange=False, **eixo_escuro)
+    fig.update_yaxes(title_text="Elevação (m)", row=1, col=2, range=[-100, 1150], autorange=False, **eixo_escuro)
     fig.update_xaxes(row=2, col=1, **eixo_escuro)
     fig.update_yaxes(title_text="Espessura (m)", row=2, col=1, range=[0, 400], **eixo_escuro)
 
@@ -472,11 +777,11 @@ def main():
         height=840,
         legend=dict(x=1.01, y=0.94, bgcolor="rgba(45,10,74,0.75)", bordercolor=MARCA_ROXO, borderwidth=1,
                     font=dict(color=MARCA_CINZA_CLARO)),
-        margin=dict(l=50, r=180, t=70, b=200),
+        margin=dict(l=50, r=180, t=70, b=220),
         updatemenus=[
             dict(
                 type="buttons", direction="left", showactive=False,
-                x=0.5, y=-0.42, xanchor="center", yanchor="top",
+                x=0.5, y=-0.38, xanchor="center", yanchor="top",
                 bgcolor=MARCA_ROXO_ESCURO, bordercolor=MARCA_ROXO, borderwidth=1.5,
                 font=dict(color=MARCA_CINZA_CLARO, family=MARCA_FONTE),
                 buttons=[dict(label=nome, method="skip") for nome, _ in ANGULOS] + [
@@ -487,6 +792,28 @@ def main():
                     dict(label="Tema: Escuro", method="skip"),
                     dict(label="Tema: Claro", method="skip"),
                 ],
+            ),
+            dict(
+                type="buttons", direction="left", showactive=False,
+                x=0.5, y=-0.46, xanchor="center", yanchor="top",
+                bgcolor=MARCA_ROXO_ESCURO, bordercolor=MARCA_ROXO, borderwidth=1.5,
+                font=dict(color=MARCA_CINZA_CLARO, family=MARCA_FONTE),
+                buttons=[
+                    dict(label="OSM: ON", method="restyle",
+                         args=[{"visible": True}, list(range(idx_osm_inicio, idx_osm_fim + 1))]),
+                    dict(label="OSM: OFF", method="restyle",
+                         args=[{"visible": False}, list(range(idx_osm_inicio, idx_osm_fim + 1))]),
+                ] + ([
+                    dict(label="Campo: ON", method="restyle",
+                         args=[{"visible": True}, [idx_pontos_campo, idx_campo_pin_linha, idx_campo_pin_marcador]]),
+                    dict(label="Campo: OFF", method="restyle",
+                         args=[{"visible": False}, [idx_pontos_campo, idx_campo_pin_linha, idx_campo_pin_marcador]]),
+                ] if idx_pontos_campo is not None else []) + ([
+                    dict(label="Estrutura: ON", method="restyle",
+                         args=[{"visible": True}, [idx_estrutural_risco, idx_estrutural_simbolo]]),
+                    dict(label="Estrutura: OFF", method="restyle",
+                         args=[{"visible": False}, [idx_estrutural_risco, idx_estrutural_simbolo]]),
+                ] if idx_estrutural_risco is not None else []),
             ),
         ],
         sliders=[dict(
@@ -507,8 +834,8 @@ def main():
     )
 
     angulos_js = ",\n        ".join(
-        "{dx:%.6f, dy:%.6f, px:%.6f, py:%.6f, compKm:%.3f, dir0:'%s', dir1:'%s', t:[%s]}" % (
-            info["dx"], info["dy"], info["px"], info["py"],
+        "{dx:%.6f, dy:%.6f, px:%.6f, py:%.6f, s0:%.3f, compKm:%.3f, dir0:'%s', dir1:'%s', t:[%s]}" % (
+            info["dx"], info["dy"], info["px"], info["py"], info["s_vals"][0],
             (info["s_vals"][-1] - info["s_vals"][0]) / 1000,
             *extrair_direcoes(info["nome"]),
             ",".join(f"{t:.2f}" for t in info["t_vals"]),
@@ -520,6 +847,28 @@ def main():
         for secoes_angulo in todas_secoes
     )
     nomes_camadas_js = ",".join(f"'{nome}'" for nome in NOMES_CAMADAS)
+    localidades_js = ",".join(
+        "{nome:%r, x:%.1f, y:%.1f}" % (str(nome), x, y) for nome, x, y in localidades_dados
+    )
+    campo_js = ",".join(
+        "{nome:%r, x:%.1f, y:%.1f, cor:%r, hover:%r}" % (str(nome), x, y, cor, hover)
+        for nome, x, y, cor, hover in campo_dados_secao
+    )
+    estrutural_js = ",".join(
+        "{x:%.1f, y:%.1f, hover:%r}" % (x, y, hover) for x, y, hover in estrutural_dados_secao
+    )
+
+    def cruzamentos_js(todas_pins):
+        return ",\n        ".join(
+            "[" + ",\n         ".join(
+                "[" + ",".join("{s:%.3f,z:%.1f,nome:%r}" % (s, z, str(nome)) for s, z, nome in pos) + "]"
+                for pos in pins_angulo
+            ) + "]"
+            for pins_angulo in todas_pins
+        )
+
+    pins_rios_js = cruzamentos_js(todas_pins_rios)
+    pins_estradas_js = cruzamentos_js(todas_pins_estradas)
     logo_b64 = logo_base64()
     marca_html = f"""
     (function() {{
@@ -543,6 +892,8 @@ def main():
     {marca_html}
     (function() {{
         var CX = {CX}, CY = {CY};
+        var RANGE_MAPA_X = [{X_MIN}, {X_MAX}], RANGE_MAPA_Y = [{Y_MIN}, {Y_MAX}];
+        var RANGE_SECAO_Y = [-100, 1150];
         var ANGULOS = [
         {angulos_js}
         ];
@@ -550,8 +901,38 @@ def main():
         {espessuras_js}
         ];
         var NOMES_CAMADAS = [{nomes_camadas_js}];
+        var LOCALIDADES = [{localidades_js}];
+        var PONTOS_CAMPO_SECAO = [{campo_js}];
+        var ESTRUTURAL_SECAO = [{estrutural_js}];
+        var PINS_RIOS = [
+        {pins_rios_js}
+        ];
+        var PINS_ESTRADAS = [
+        {pins_estradas_js}
+        ];
+        var LIMIAR_PIN_M = 2000;  // so vira pin se a linha de corte passar a menos de 2km da localidade
+        var LIMIAR_PIN_CAMPO_M = 400;  // pontos de campo sao 308 -- limiar bem mais apertado que localidades
+        var ALTURA_PIN_M = 60;  // marcador fica esse tanto (metros) acima da topografia real
+        var TETO_PIN_M = 1100;  // ceiling absoluto -- evita que o pin (principalmente localidade,
+                                 // que pode escalonar bem alto com o boost) suba pra fora do eixo Y
+                                 // (range vai ate 1150) e "suma" da visualizacao
         var IDX_TRACE_BARRA = {idx_trace_barra};
         var IDX_TRACE_TERRENO = {idx_trace_terreno};
+        var IDX_PIN_LUGARES_LINHA = {idx_pin_traces["lugares_linha"]};
+        var IDX_PIN_LUGARES_MARCADOR = {idx_pin_traces["lugares_marcador"]};
+        var IDX_PIN_RIOS_LINHA = {idx_pin_traces["rios_linha"]};
+        var IDX_PIN_RIOS_MARCADOR = {idx_pin_traces["rios_marcador"]};
+        var IDX_PIN_ESTRADAS_LINHA = {idx_pin_traces["estradas_linha"]};
+        var IDX_PIN_ESTRADAS_MARCADOR = {idx_pin_traces["estradas_marcador"]};
+        var IDX_CAMPO_PIN_LINHA = {idx_campo_pin_linha};
+        var IDX_CAMPO_PIN_MARCADOR = {idx_campo_pin_marcador};
+        var IDX_ESTRUTURAL_RISCO = {idx_estrutural_risco};
+        var IDX_ESTRUTURAL_SIMBOLO = {idx_estrutural_simbolo};
+        var LIMIAR_ESTRUTURAL_M = 400;  // mesmo limiar apertado dos pontos de campo
+        var Y_MIN_SECAO = -100;  // fundo fixo do risco -- bate com o novo limite inferior do eixo (topo segue a topografia real)
+        var GAP_SIMBOLO_KM = 0.04;  // buffer/gap entre cada meia-seta e o risco vertical
+        var ALTURA_SIMBOLO_M = 100;  // variacao vertical (altura) de cada meia-seta, em metros
+        var OFFSET_SIMBOLO_M = 80;  // deslocamento vertical entre as duas metades (efeito "fatiado")
         var IDX_ANOTACAO_DIR0 = {idx_anotacao_dir0};
         var IDX_ANOTACAO_DIR1 = {idx_anotacao_dir1};
         var IDX_ANOTACOES_SUBTITULO = [0, 1, 2];
@@ -582,6 +963,7 @@ def main():
                 'legend.bgcolor': t.legendBg, 'legend.font.color': t.texto,
                 'title.font.color': t.texto,
                 'updatemenus[0].bgcolor': t.botaoBg, 'updatemenus[0].font.color': t.texto,
+                'updatemenus[1].bgcolor': t.botaoBg, 'updatemenus[1].font.color': t.texto,
                 'sliders[0].bgcolor': t.botaoBg, 'sliders[0].font.color': t.texto,
                 'sliders[0].currentvalue.font.color': t.texto,
                 'xaxis2.color': t.texto, 'xaxis2.gridcolor': t.grid, 'xaxis2.zerolinecolor': t.zerogrid,
@@ -595,13 +977,224 @@ def main():
             Plotly.relayout(gd, patch);
             Plotly.restyle(gd, {{'line.color': t.texto}}, [IDX_TRACE_TERRENO]);
             Plotly.restyle(gd, {{'textfont.color': t.texto}}, [IDX_TRACE_BARRA]);
+            // rotulos dos pins (nome da localidade/rio/estrada na secao) tambem
+            // tem cor propria fixa na criacao -- sem isso ficavam ilegiveis no
+            // tema claro (texto claro sobre fundo claro).
+            var idxTextoPins = [IDX_PIN_LUGARES_MARCADOR, IDX_PIN_RIOS_MARCADOR, IDX_PIN_ESTRADAS_MARCADOR];
+            if (IDX_CAMPO_PIN_MARCADOR !== null) {{ idxTextoPins.push(IDX_CAMPO_PIN_MARCADOR); }}
+            Plotly.restyle(gd, {{'textfont.color': t.texto}}, idxTextoPins);
             document.body.style.background = t.paper;
+        }}
+
+        // elevacao real (interpolada) do terreno numa distancia x (km) do
+        // perfil ATUAL -- usa a propria trace do terreno (ja reflete o
+        // angulo/posicao em exibicao), busca linear (poucas centenas de
+        // pontos, ok pra rodar a cada mudanca de angulo/slider).
+        function interpolarElevacao(xKm) {{
+            var tr = gd._fullData[IDX_TRACE_TERRENO];
+            var tx = tr.x, ty = tr.y;
+            var n = tx.length;
+            if (xKm <= tx[0]) return ty[0];
+            if (xKm >= tx[n - 1]) return ty[n - 1];
+            for (var i = 0; i < n - 1; i++) {{
+                if (tx[i] <= xKm && xKm <= tx[i + 1]) {{
+                    var frac = (tx[i + 1] === tx[i]) ? 0 : (xKm - tx[i]) / (tx[i + 1] - tx[i]);
+                    return ty[i] + frac * (ty[i + 1] - ty[i]);
+                }}
+            }}
+            return ty[n - 1];
+        }}
+
+        var LIMIAR_SOBREPOSICAO_KM = 0.5;  // pins mais pertos que isso escalonam de altura
+        var N_NIVEIS_ALTURA = 4;  // 1x,2x,3x,4x ALTURA_PIN_M, depois volta pro 1x
+
+        // escalona a altura (multiplo de ALTURA_PIN_M) de cada ponto -- pontos
+        // ja ordenados por x: sobe 1 nivel toda vez que o proximo esta perto
+        // do anterior (< LIMIAR_SOBREPOSICAO_KM), reseta quando abre espaco.
+        // Evita rotulo grudado em rotulo quando varios pins caem perto (ver
+        // screenshot que o usuario mandou -- "Estrada Estrada Sao..." ilegivel).
+        // localidade (municipio) fica sempre em destaque -- maior e mais alta
+        // que rio/estrada por perto, mesmo dentro do mesmo cluster de
+        // sobreposicao (pedido explicito do usuario).
+        var BOOST_LUGARES_NIVEIS = 2;
+
+        function atribuirAlturas(pontosOrdenados) {{
+            var nivel = 0;
+            pontosOrdenados.forEach(function(p, i) {{
+                if (i > 0 && (p.x - pontosOrdenados[i - 1].x) < LIMIAR_SOBREPOSICAO_KM) {{
+                    nivel = (nivel + 1) % N_NIVEIS_ALTURA;
+                }} else {{
+                    nivel = 0;
+                }}
+                var nivelFinal = nivel + (p.tipo === 'lugares' ? N_NIVEIS_ALTURA + BOOST_LUGARES_NIVEIS : 0);
+                p.altura = ALTURA_PIN_M * (nivelFinal + 1);
+            }});
+        }}
+
+        // monta a linha condutora (base na topografia real, ponta na altura
+        // escalonada) + DOIS marcadores por pin: um pequeno exatamente na
+        // posicao/elevacao real do cruzamento (a "posicao" pedida, nao so o
+        // rotulo flutuando) e o marcador estilizado (com o nome) na ponta da
+        // linha condutora, estilo balao de mapa.
+        function restylarPins(idxLinha, idxMarcador, pontos, corTipo, simboloTipo, tamanhoTopo) {{
+            var lx = [], ly = [], mx = [], my = [], texts = [], sizes = [], symbols = [], cores = [], hovers = [];
+            pontos.forEach(function(p, i) {{
+                if (i > 0) {{ lx.push(NaN); ly.push(NaN); }}
+                var topo = Math.min(p.z + p.altura, TETO_PIN_M);
+                var cor = p.cor || corTipo;  // pontos de campo tem cor propria (por litologia)
+                lx.push(p.x, p.x);
+                ly.push(p.z, topo);
+                // ponto na posicao real (pequeno, sem rotulo)
+                mx.push(p.x); my.push(p.z); texts.push(''); sizes.push(5); symbols.push('circle'); cores.push(cor); hovers.push('');
+                // ponto na ponta da linha condutora (estilizado, com o nome) --
+                // localidade fica maior (tamanhoTopo), em destaque sobre rio/estrada.
+                // popup no hover so pra quem tem dado (p.hover, ex.: pontos de campo).
+                mx.push(p.x); my.push(topo); texts.push(p.nome); sizes.push(tamanhoTopo); symbols.push(simboloTipo); cores.push(cor);
+                hovers.push(p.hover || p.nome);
+            }});
+            Plotly.restyle(gd, {{x: [lx], y: [ly]}}, [idxLinha]);
+            Plotly.restyle(gd, {{
+                x: [mx], y: [my], text: [texts], hovertext: [hovers],
+                'marker.size': [sizes], 'marker.symbol': [symbols], 'marker.color': [cores],
+            }}, [idxMarcador]);
+        }}
+
+        // projeta cada localidade na linha de corte ATUAL (angulo a, deslocamento
+        // perpendicular offsetT) -- decompoe o vetor CX,CY->localidade na base
+        // ortonormal (dx,dy)/(px,py): a componente ao longo de (dx,dy) da a
+        // posicao na secao (mesmo "s" usado pra amostrar o perfil, indepen-
+        // dente de offsetT); a componente ao longo de (px,py) da a distancia
+        // perpendicular da localidade ATE a linha center (CX,CY) -- subtraindo
+        // offsetT da isso vira a distancia ate a linha JA deslocada. So vira
+        // pin se essa distancia perpendicular for pequena (LIMIAR_PIN_M). Rios
+        // e estradas usam cruzamento real pre-calculado (PINS_RIOS/PINS_ESTRADAS),
+        // ja tem a elevacao exata do ponto de cruzamento. As alturas sao
+        // escalonadas JUNTAS (localidade+rio+estrada perto uma da outra
+        // tambem colidem no grafico), depois cada tipo e restilizado separado.
+        function atualizarPins(a, p) {{
+            var info = ANGULOS[a];
+            var offsetT = info.t[p];
+            var lugares = [];
+            LOCALIDADES.forEach(function(loc) {{
+                var vx = loc.x - CX, vy = loc.y - CY;
+                var s = vx * info.dx + vy * info.dy;
+                var tLoc = vx * info.px + vy * info.py;
+                var perp = tLoc - offsetT;
+                if (Math.abs(perp) <= LIMIAR_PIN_M) {{
+                    var xKm = (s - info.s0) / 1000;
+                    lugares.push({{x: xKm, z: interpolarElevacao(xKm), nome: loc.nome, tipo: 'lugares'}});
+                }}
+            }});
+            var rios = (PINS_RIOS[a][p] || []).map(function(c) {{ return {{x: c.s, z: c.z, nome: c.nome, tipo: 'rios'}}; }});
+            var estradas = (PINS_ESTRADAS[a][p] || []).map(function(c) {{ return {{x: c.s, z: c.z, nome: c.nome, tipo: 'estradas'}}; }});
+
+            // pontos de campo: mesma projecao continua das localidades, mas com
+            // limiar bem mais apertado (LIMIAR_PIN_CAMPO_M) -- sao 308 pontos, um
+            // limiar igual ao das localidades inundaria a secao de pins.
+            var campo = [];
+            PONTOS_CAMPO_SECAO.forEach(function(pt) {{
+                var vx = pt.x - CX, vy = pt.y - CY;
+                var s = vx * info.dx + vy * info.dy;
+                var tLoc = vx * info.px + vy * info.py;
+                var perp = tLoc - offsetT;
+                if (Math.abs(perp) <= LIMIAR_PIN_CAMPO_M) {{
+                    var xKm = (s - info.s0) / 1000;
+                    campo.push({{x: xKm, z: interpolarElevacao(xKm), nome: pt.nome, cor: pt.cor, hover: pt.hover, tipo: 'campo'}});
+                }}
+            }});
+
+            var todos = lugares.concat(rios, estradas, campo);
+            todos.sort(function(a, b) {{ return a.x - b.x; }});
+            atribuirAlturas(todos);
+
+            restylarPins(IDX_PIN_LUGARES_LINHA, IDX_PIN_LUGARES_MARCADOR,
+                todos.filter(function(pt) {{ return pt.tipo === 'lugares'; }}), '{MARCA_ROXO}', 'triangle-down', 15);
+            restylarPins(IDX_PIN_RIOS_LINHA, IDX_PIN_RIOS_MARCADOR,
+                todos.filter(function(pt) {{ return pt.tipo === 'rios'; }}), '#2E6F95', 'circle', 9);
+            restylarPins(IDX_PIN_ESTRADAS_LINHA, IDX_PIN_ESTRADAS_MARCADOR,
+                todos.filter(function(pt) {{ return pt.tipo === 'estradas'; }}), '#4A4A4A', 'square', 9);
+            restylarPins(IDX_CAMPO_PIN_LINHA, IDX_CAMPO_PIN_MARCADOR,
+                todos.filter(function(pt) {{ return pt.tipo === 'campo'; }}), '{COR_LITOLOGIA_PADRAO}', 'diamond', 9);
+        }}
+
+        // risco vertical fino cortando a secao -- projeta cada lineamento/
+        // ponto estrutural na linha de corte ATUAL igual as localidades
+        // (mesma decomposicao ortonormal), mas SEM elevacao/altura de pin:
+        // e uma linha reta que vai do fundo da secao (Y_MIN_SECAO) ATE a
+        // topografia real naquele x (interpolarElevacao) -- nao ultrapassa
+        // o relevo, so risca por baixo dele. Sem inclinacao por mergulho de
+        // proposito pros pontos sem dip medido (lineamento de satelite).
+        // desenha uma meia-seta: cabo vertical (90 graus, paralelo ao proprio
+        // risco) de (x,y0) a (x,y1), mais UMA farpa curta no head (lado
+        // externo, longe do risco) formando a ponta -- sem farpa do lado de
+        // dentro, pra nao ficar com a seta "cheia"/dobrada em cima da linha.
+        var LARGURA_FARPA_KM = 0.05, ALTURA_FARPA_M = 50;
+        function adicionarMeiaSeta(xs, ys, x, y0, y1, ladoFarpa) {{
+            if (xs.length > 0) {{ xs.push(NaN); ys.push(NaN); }}
+            xs.push(x, x); ys.push(y0, y1);
+            var dirYFarpa = (y1 > y0) ? -1 : 1;
+            xs.push(NaN, x, x + ladoFarpa * LARGURA_FARPA_KM);
+            ys.push(NaN, y1, y1 + dirYFarpa * ALTURA_FARPA_M);
+        }}
+
+        function atualizarEstrutural(a, offsetT) {{
+            var info = ANGULOS[a];
+            var xs = [], ys = [], hovers = [];
+            var xsSimbolo = [], ysSimbolo = [];
+            ESTRUTURAL_SECAO.forEach(function(pt) {{
+                var vx = pt.x - CX, vy = pt.y - CY;
+                var s = vx * info.dx + vy * info.dy;
+                var tLoc = vx * info.px + vy * info.py;
+                var perp = tLoc - offsetT;
+                if (Math.abs(perp) <= LIMIAR_ESTRUTURAL_M) {{
+                    var xKm = (s - info.s0) / 1000;
+                    var yTopo = interpolarElevacao(xKm);
+                    if (xs.length > 0) {{ xs.push(NaN); ys.push(NaN); hovers.push(''); }}
+                    xs.push(xKm, xKm); ys.push(Y_MIN_SECAO, yTopo);
+                    hovers.push(pt.hover, pt.hover);
+                    // simbolo de falha logo abaixo da topografia -- uma seta
+                    // "fatiada" pelo risco: meia-seta subindo do lado esquerdo
+                    // (desgrudada da linha, com um pequeno buffer/gap) apontando
+                    // pra cima, e a outra metade descendo do lado direito
+                    // apontando pra baixo -- como se a seta tivesse sido cortada
+                    // e deslocada pelo proprio risco (convencao geologica padrao
+                    // de simbolo de falha em secao).
+                    var yCentro = yTopo - 150;
+                    // cabo vertical de cada lado (90 graus, igual ao risco) --
+                    // esquerda sobe, direita desce -- com a farpa apontando
+                    // pra fora (longe da linha).
+                    adicionarMeiaSeta(xsSimbolo, ysSimbolo, xKm - GAP_SIMBOLO_KM,
+                        yCentro - OFFSET_SIMBOLO_M / 2, yCentro - OFFSET_SIMBOLO_M / 2 + ALTURA_SIMBOLO_M, -1);
+                    adicionarMeiaSeta(xsSimbolo, ysSimbolo, xKm + GAP_SIMBOLO_KM,
+                        yCentro + OFFSET_SIMBOLO_M / 2, yCentro + OFFSET_SIMBOLO_M / 2 - ALTURA_SIMBOLO_M, 1);
+                }}
+            }});
+            Plotly.restyle(gd, {{x: [xs], y: [ys], hovertext: [hovers]}}, [IDX_ESTRUTURAL_RISCO]);
+            if (IDX_ESTRUTURAL_SIMBOLO !== null) {{
+                Plotly.restyle(gd, {{x: [xsSimbolo], y: [ysSimbolo]}}, [IDX_ESTRUTURAL_SIMBOLO]);
+            }}
         }}
 
         function atualizarEspessuras(a, p) {{
             var vals = ESPESSURAS[a][p];
             var rotulos = vals.map(function(v) {{ return Math.round(v) + 'm'; }});
             Plotly.restyle(gd, {{y: [vals], text: [rotulos]}}, [IDX_TRACE_BARRA]);
+            atualizarPins(a, p);
+            atualizarEstrutural(a, ANGULOS[a].t[p]);
+        }}
+
+        // forca os eixos (mapa + secao) de volta pro recorte padrao definido --
+        // o Plotly recalcula range pelo extremo REAL dos dados (mesmo com
+        // autorange=False no layout inicial) sempre que um redraw acontece
+        // depois de trace/frame novo entrar em cena (animate inicial, toggle
+        // de OSM/campo/estrutura, duplo clique) -- sem isso o mapa/secao
+        // "vazam" pra fora do recorte (rios/estradas OSM v e o piso artificial
+        // do preenchimento do dique, bem mais fundo que a topografia real).
+        function resetarEixosPadrao() {{
+            Plotly.relayout(gd, {{
+                'xaxis.range': RANGE_MAPA_X, 'yaxis.range': RANGE_MAPA_Y,
+                'xaxis2.range': [0, ANGULOS[anguloAtual].compKm], 'yaxis2.range': RANGE_SECAO_Y,
+            }});
         }}
 
         // forca o estado inicial (posicao central) -- o slider as vezes
@@ -611,6 +1204,7 @@ def main():
         Plotly.animate(gd, ['0_' + posMeioInicial], {{mode: 'immediate', frame: {{duration: 0, redraw: true}}, transition: {{duration: 0}}}});
         Plotly.relayout(gd, {{'sliders[0].active': posMeioInicial}});
         atualizarEspessuras(0, posMeioInicial);
+        resetarEixosPadrao();
 
         function stepsParaAngulo(a) {{
             var info = ANGULOS[a];
@@ -646,16 +1240,49 @@ def main():
 
         gd.on('plotly_buttonclicked', function(ev) {{
             if (typeof ev.active !== 'number') return;
-            if (ev.active < ANGULOS.length) {{
-                irParaAngulo(ev.active);
-            }} else if (ev.active === ANGULOS.length + 2) {{
-                aplicarTema('escuro');
-            }} else if (ev.active === ANGULOS.length + 3) {{
-                aplicarTema('claro');
+            // ev.active e sempre LOCAL ao menu clicado, nao global -- com 2
+            // linhas de updatemenus (angulo/mapa/tema na primeira, OSM/campo/
+            // estrutura na segunda), sem checar QUAL menu disparou o evento,
+            // um clique em "OSM: ON" (ev.active=0 na 2a linha) seria
+            // interpretado aqui como clique no botao de angulo 0 (Horizontal),
+            // forcando a secao de volta pro Horizontal sem o usuario pedir --
+            // esse era o bug de "trocar de aba bugava, tinha que ficar
+            // voltando". So processa eventos vindos da PRIMEIRA linha
+            // (angulo/mapa/tema); a segunda linha (OSM/campo/estrutura) so
+            // usa method='restyle' nativo, sem necessidade de JS aqui.
+            if (Math.abs(ev.menu.y - (-0.38)) <= 0.01) {{
+                if (ev.active < ANGULOS.length) {{
+                    irParaAngulo(ev.active);
+                }} else if (ev.active === ANGULOS.length + 2) {{
+                    aplicarTema('escuro');
+                }} else if (ev.active === ANGULOS.length + 3) {{
+                    aplicarTema('claro');
+                }}
+                // botoes "Mapa: Hipsometria/Geologia" (ANGULOS.length, +1) usam
+                // method='restyle' proprio, nao precisam de JS aqui.
             }}
-            // botoes "Mapa: Hipsometria/Geologia" (ANGULOS.length, +1) usam
-            // method='restyle' proprio, nao precisam de JS aqui.
+            // QUALQUER clique de botao (linha 1 ou 2) pode disparar um redraw
+            // interno do Plotly que desalinha os eixos do recorte padrao (o
+            // mesmo problema do duplo-clique, ver resetarEixosPadrao) --
+            // reforca depois que o restyle/relayout nativo do botao ja
+            // terminou (delay real, nao so setTimeout(0) -- ver comentario
+            // no handler de plotly_doubleclick), sem interferir em zoom/pan
+            // manual do usuario via mouse (que nao passa por aqui).
+            setTimeout(resetarEixosPadrao, 60);
         }});
+
+        // duplo-clique no grafico (reset nativo do Plotly) ignora o range/
+        // autorange configurado e recalcula pelo extremo REAL dos dados --
+        // isso incluia o piso artificial do preenchimento do dique/sill
+        // (BASE_Z_ABSOLUTA, bem mais fundo que a topografia real) e rios/
+        // estradas OSM que vao bem alem da area do modelo, entao o "reset"
+        // jogava os eixos pra fora do recorte padrao. Intercepta o evento e
+        // forca de volta (mesma funcao usada apos clique de botao) -- o
+        // proprio reset interno do Plotly aplica o range ruim DEPOIS de
+        // emitir esse evento (confirmado testando), entao um setTimeout(0)
+        // simples nao bastava -- precisa de um delay real (~60ms) pra
+        // garantir que roda por ULTIMO, depois do reset nativo.
+        gd.on('plotly_doubleclick', function() {{ setTimeout(resetarEixosPadrao, 60); }});
 
         // slider arrastado direto (nao via botao/clique) tambem atualiza a
         // espessura -- setTimeout deixa o Plotly terminar de aplicar o novo
@@ -685,6 +1312,14 @@ def main():
     """
 
     fig.write_html(str(OUT_HTML), include_plotlyjs="inline", full_html=True, post_script=post_script)
+    favicon_tags = (
+        '<link rel="icon" type="image/png" href="assets/favicon.png">'
+        '<link rel="shortcut icon" href="assets/favicon.ico">'
+        '<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">'
+    )
+    html_txt = OUT_HTML.read_text(encoding="utf-8")
+    html_txt = html_txt.replace('<head><meta charset="utf-8" /></head>', f'<head><meta charset="utf-8" />{favicon_tags}</head>', 1)
+    OUT_HTML.write_text(html_txt, encoding="utf-8")
     print(f"Salvo em: {OUT_HTML}")
 
 
