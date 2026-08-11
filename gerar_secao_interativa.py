@@ -29,7 +29,7 @@ from shapely.geometry import LineString, Point, shape as shapely_shape
 from shapely.geometry.polygon import orient
 from shapely.ops import unary_union
 
-BASE = Path(r"C:\Users\thuba\Desktop\Mestrado\1_Modelo_3D_Taio")
+BASE = Path(__file__).parent.parent
 TOPO_NPY = BASE / "dados_entrada" / "topografia_drone" / "topografia_xyz.npy"
 POLIGONO_REFERENCIA = BASE.parent / "2_Banco_de_Dados" / "dados_base" / "poligon_intrusiva.shp"
 POLIGONOS_CPRM_GEOJSON = BASE.parent / "2_Banco_de_Dados" / "saida_processada" / "formacoes_cprm_poligonos.geojson"
@@ -121,7 +121,10 @@ CORES_CLASSIFICACAO_ESTRUTURAL = {
     "fabrica_interna_intrusao": "#7B2FFF",
 }
 COR_CLASSIFICACAO_PADRAO = "#999999"
-ESPESSURA_SILL = 400.0
+ESPESSURA_SILL = 400.0  # OBSOLETO (10/08/2026) -- o sill deixou de usar espessura fixa, ver
+# ESPESSURA_MINIMA_SILL/amostrar_linha (base = topo da Serra Alta, nao mais um offset).
+ESPESSURA_MINIMA_SILL = 27.0  # espessura minima do sill (m) -- mediana real medida em campo
+# (mesmo valor/mesmo motivo de ../visualizacao_web/gerar_visualizador_3d.py).
 QUATERNARIO_LIMIAR = 450.0
 QUATERNARIO_ESPESSURA = 30.0
 BASE_Z_ABSOLUTA = -600.0  # piso do "cubao" -- rebaixado pra caber a espessura real das 5 formacoes
@@ -300,7 +303,11 @@ def amostrar_linha(cx_linha, cy_linha, dx, dy, s_vals, elevacao, sill_geom, diqu
     dados["espessuras"] = espessuras
 
     dados["quaternario"] = banda_toself(dists, terreno, terreno - QUATERNARIO_ESPESSURA, terreno <= QUATERNARIO_LIMIAR)
-    dados["sill"] = banda_toself(dists, terreno, terreno - ESPESSURA_SILL, dentro_sill)
+    # base do sill = topo da Serra Alta (contatos[1], mesmo plano de mergulho +
+    # erosao usado pra desenhar essa camada) em vez de espessura fixa -- nunca
+    # mais fino que ESPESSURA_MINIMA_SILL onde a Serra Alta fica rasa demais.
+    base_sill = np.minimum(contatos[1], terreno - ESPESSURA_MINIMA_SILL)
+    dados["sill"] = banda_toself(dists, terreno, base_sill, dentro_sill)
     dados["dique"] = banda_toself(dists, terreno, np.full_like(terreno, BASE_Z_ABSOLUTA), dentro_dique)
     dados["terreno"] = (dists, terreno)
     dados["linha_mapa"] = (np.array([xs[0], xs[-1]]), np.array([ys[0], ys[-1]]))
