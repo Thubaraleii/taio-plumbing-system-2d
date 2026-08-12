@@ -806,22 +806,9 @@ def main():
                 x=0.5, y=-0.46, xanchor="center", yanchor="top",
                 bgcolor=MARCA_ROXO_ESCURO, bordercolor=MARCA_ROXO, borderwidth=1.5,
                 font=dict(color=MARCA_CINZA_CLARO, family=MARCA_FONTE),
-                buttons=[
-                    dict(label="OSM: ON", method="restyle",
-                         args=[{"visible": True}, list(range(idx_osm_inicio, idx_osm_fim + 1))]),
-                    dict(label="OSM: OFF", method="restyle",
-                         args=[{"visible": False}, list(range(idx_osm_inicio, idx_osm_fim + 1))]),
-                ] + ([
-                    dict(label="Campo: ON", method="restyle",
-                         args=[{"visible": True}, [idx_pontos_campo, idx_campo_pin_linha, idx_campo_pin_marcador]]),
-                    dict(label="Campo: OFF", method="restyle",
-                         args=[{"visible": False}, [idx_pontos_campo, idx_campo_pin_linha, idx_campo_pin_marcador]]),
-                ] if idx_pontos_campo is not None else []) + ([
-                    dict(label="Estrutura: ON", method="restyle",
-                         args=[{"visible": True}, [idx_estrutural_risco, idx_estrutural_simbolo]]),
-                    dict(label="Estrutura: OFF", method="restyle",
-                         args=[{"visible": False}, [idx_estrutural_risco, idx_estrutural_simbolo]]),
-                ] if idx_estrutural_risco is not None else []),
+                buttons=[dict(label="OSM: OFF", method="skip")]
+                + ([dict(label="Campo: OFF", method="skip")] if idx_pontos_campo is not None else [])
+                + ([dict(label="Estrutura: OFF", method="skip")] if idx_estrutural_risco is not None else []),
             ),
         ],
         sliders=[dict(
@@ -944,6 +931,9 @@ def main():
         var IDX_ANOTACAO_DIR0 = {idx_anotacao_dir0};
         var IDX_ANOTACAO_DIR1 = {idx_anotacao_dir1};
         var IDX_ANOTACOES_SUBTITULO = [0, 1, 2];
+        var INDICES_OSM = [{",".join(str(i) for i in range(idx_osm_inicio, idx_osm_fim + 1))}];
+        var INDICES_CAMPO = {f"[{idx_pontos_campo},{idx_campo_pin_linha},{idx_campo_pin_marcador}]" if idx_pontos_campo is not None else "null"};
+        var INDICES_ESTRUTURA = {f"[{idx_estrutural_risco},{idx_estrutural_simbolo}]" if idx_estrutural_risco is not None else "null"};
         var anguloAtual = 0;
         var gd = document.getElementsByClassName('plotly-graph-div')[0];
 
@@ -992,6 +982,39 @@ def main():
             if (IDX_CAMPO_PIN_MARCADOR !== null) {{ idxTextoPins.push(IDX_CAMPO_PIN_MARCADOR); }}
             Plotly.restyle(gd, {{'textfont.color': t.texto}}, idxTextoPins);
             document.body.style.background = t.paper;
+        }}
+
+        // botoes liga/desliga (OSM/Campo/Estrutura) viram um clique so em vez
+        // de par ON/OFF -- indiceBotao = posicao dentro do menu 2 (0=OSM,
+        // depois Campo/Estrutura so se existirem), usado pra achar o proprio
+        // botao e atualizar o texto dele depois do clique.
+        function atualizarLabelBotaoMenu2(indiceBotao, texto) {{
+            var patch = {{}};
+            patch['updatemenus[1].buttons[' + indiceBotao + '].label'] = texto;
+            Plotly.relayout(gd, patch);
+        }}
+
+        var osmAtivo = false;
+        function alternarOSM() {{
+            osmAtivo = !osmAtivo;
+            Plotly.restyle(gd, {{visible: osmAtivo}}, INDICES_OSM);
+            atualizarLabelBotaoMenu2(0, osmAtivo ? 'OSM: ON' : 'OSM: OFF');
+        }}
+
+        var campoAtivo = false;
+        function alternarCampo() {{
+            if (!INDICES_CAMPO) return;
+            campoAtivo = !campoAtivo;
+            Plotly.restyle(gd, {{visible: campoAtivo}}, INDICES_CAMPO);
+            atualizarLabelBotaoMenu2(1, campoAtivo ? 'Campo: ON' : 'Campo: OFF');
+        }}
+
+        var estruturaAtiva = false;
+        function alternarEstrutura() {{
+            if (!INDICES_ESTRUTURA) return;
+            estruturaAtiva = !estruturaAtiva;
+            Plotly.restyle(gd, {{visible: estruturaAtiva}}, INDICES_ESTRUTURA);
+            atualizarLabelBotaoMenu2(INDICES_CAMPO ? 2 : 1, estruturaAtiva ? 'Estrutura: ON' : 'Estrutura: OFF');
         }}
 
         // elevacao real (interpolada) do terreno numa distancia x (km) do
@@ -1251,13 +1274,10 @@ def main():
             // ev.active e sempre LOCAL ao menu clicado, nao global -- com 2
             // linhas de updatemenus (angulo/mapa/tema na primeira, OSM/campo/
             // estrutura na segunda), sem checar QUAL menu disparou o evento,
-            // um clique em "OSM: ON" (ev.active=0 na 2a linha) seria
-            // interpretado aqui como clique no botao de angulo 0 (Horizontal),
-            // forcando a secao de volta pro Horizontal sem o usuario pedir --
-            // esse era o bug de "trocar de aba bugava, tinha que ficar
-            // voltando". So processa eventos vindos da PRIMEIRA linha
-            // (angulo/mapa/tema); a segunda linha (OSM/campo/estrutura) so
-            // usa method='restyle' nativo, sem necessidade de JS aqui.
+            // um clique em "OSM" (ev.active=0 na 2a linha) seria interpretado
+            // aqui como clique no botao de angulo 0 (Horizontal), forcando a
+            // secao de volta pro Horizontal sem o usuario pedir -- esse era o
+            // bug de "trocar de aba bugava, tinha que ficar voltando".
             if (Math.abs(ev.menu.y - (-0.38)) <= 0.01) {{
                 if (ev.active < ANGULOS.length) {{
                     irParaAngulo(ev.active);
@@ -1268,6 +1288,20 @@ def main():
                 }}
                 // botoes "Mapa: Hipsometria/Geologia" (ANGULOS.length, +1) usam
                 // method='restyle' proprio, nao precisam de JS aqui.
+            }} else if (Math.abs(ev.menu.y - (-0.46)) <= 0.01) {{
+                // OSM (sempre indice 0) / Campo / Estrutura -- cada um agora e
+                // um botao so (liga/desliga), ordem = mesma ordem que entraram
+                // no menu (so existem se INDICES_CAMPO/INDICES_ESTRUTURA != null).
+                var indice = 0;
+                if (ev.active === indice) {{ alternarOSM(); return setTimeout(resetarEixosPadrao, 60); }}
+                if (INDICES_CAMPO) {{
+                    indice++;
+                    if (ev.active === indice) {{ alternarCampo(); return setTimeout(resetarEixosPadrao, 60); }}
+                }}
+                if (INDICES_ESTRUTURA) {{
+                    indice++;
+                    if (ev.active === indice) {{ alternarEstrutura(); return setTimeout(resetarEixosPadrao, 60); }}
+                }}
             }}
             // QUALQUER clique de botao (linha 1 ou 2) pode disparar um redraw
             // interno do Plotly que desalinha os eixos do recorte padrao (o
