@@ -24,8 +24,10 @@ import plotly.graph_objects as go
 import rasterio.features
 from affine import Affine
 from plotly.subplots import make_subplots
+from rasterio.transform import from_bounds
+from rasterio.warp import Resampling, reproject
 from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator, griddata
-from shapely.geometry import LineString, Point, shape as shapely_shape
+from shapely.geometry import LineString, Point, box, shape as shapely_shape
 from shapely.geometry.polygon import orient
 from shapely.ops import unary_union
 
@@ -64,6 +66,53 @@ def logo_base64():
 X_MIN, X_MAX = 582500.0, 604500.0
 Y_MIN, Y_MAX = 6995000.0, 7029000.0
 CX, CY = (X_MIN + X_MAX) / 2, (Y_MIN + Y_MAX) / 2
+
+# zoom inicial do MINIMAPA (mapa em planta) -- "2 zooms menores" que o
+# recorte exato dos dados (X_MIN/X_MAX/Y_MIN/Y_MAX): dobra o span visivel
+# em cada eixo, mantendo o mesmo centro (equivalente a ~2 niveis de zoom
+# "pra fora" num mapa tipo Leaflet, onde cada nivel dobra a area visivel).
+ZOOM_INICIAL_FATOR = 2.0
+MAPA_RANGE_X = [CX - (X_MAX - X_MIN) / 2 * ZOOM_INICIAL_FATOR, CX + (X_MAX - X_MIN) / 2 * ZOOM_INICIAL_FATOR]
+MAPA_RANGE_Y = [CY - (Y_MAX - Y_MIN) / 2 * ZOOM_INICIAL_FATOR, CY + (Y_MAX - Y_MIN) / 2 * ZOOM_INICIAL_FATOR]
+
+# satelite Esri (placeholder ate ter ortomosaico proprio de drone) pro minimapa --
+# cache proprio (bounds fixos X_MIN/X_MAX/Y_MIN/Y_MAX desse script, diferentes do
+# extent real da topografia usado em gerar_visualizador_3d.py, entao NAO reaproveita
+# o cache de la -- reusar daria um leve desalinhamento de pixel).
+SATELITE_CACHE_DIR = BASE / "dados_entrada" / "satelite_esri"
+SATELITE_CACHE_NPY_MAPA = SATELITE_CACHE_DIR / "satelite_utm_mapa2d.npy"
+SATELITE_RESOLUCAO_MAPA = 1200
+SATELITE_ZOOM_MAPA = 16
+
+
+def obter_satelite_utm_mapa():
+    """Busca (ou le do cache) o raster Esri World Imagery reprojetado pra UTM
+    (EPSG:31982), cobrindo X_MIN/X_MAX/Y_MIN/Y_MAX -- mesma tecnica de
+    gerar_visualizador_3d.py (obter_satelite_utm), so que com cache/bounds
+    proprios desse minimapa 2D."""
+    if SATELITE_CACHE_NPY_MAPA.exists():
+        return np.load(SATELITE_CACHE_NPY_MAPA)
+
+    import contextily as ctx
+
+    print("Baixando imagem de satelite Esri World Imagery pro minimapa (~1 min, sera cacheada)...")
+    gdf = gpd.GeoDataFrame(geometry=[box(X_MIN, Y_MIN, X_MAX, Y_MAX)], crs="EPSG:31982")
+    w, s, e, n = gdf.to_crs("EPSG:4326").total_bounds
+    img, ext = ctx.bounds2img(
+        w, s, e, n, ll=True, zoom=SATELITE_ZOOM_MAPA, source=ctx.providers.Esri.WorldImagery, n_connections=8,
+    )
+    src_transform = from_bounds(ext[0], ext[2], ext[1], ext[3], img.shape[1], img.shape[0])
+    dst_transform = from_bounds(X_MIN, Y_MIN, X_MAX, Y_MAX, SATELITE_RESOLUCAO_MAPA, SATELITE_RESOLUCAO_MAPA)
+    dst = np.zeros((3, SATELITE_RESOLUCAO_MAPA, SATELITE_RESOLUCAO_MAPA), dtype=np.uint8)
+    reproject(
+        source=np.moveaxis(img[:, :, :3], -1, 0), destination=dst,
+        src_transform=src_transform, src_crs="EPSG:3857",
+        dst_transform=dst_transform, dst_crs="EPSG:31982",
+        resampling=Resampling.bilinear,
+    )
+    SATELITE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    np.save(SATELITE_CACHE_NPY_MAPA, dst)
+    return dst
 
 # angulos de corte disponiveis (graus, 0 = leste, sentido anti-horario --
 # mesma convencao de vetor direcao (cos,sin)). Um botao por angulo; o
@@ -453,9 +502,10 @@ def main():
     for ann in fig.layout.annotations:  # titulos dos subplots -- estiliza pra tema escuro antes de adicionar o resto
         ann.font = dict(color=MARCA_CINZA_CLARO, size=14, family=MARCA_FONTE)
 
+    idx_hipsometria_mapa = len(fig.data)
     fig.add_trace(go.Heatmap(
         x=mx[0, :], y=my[:, 0], z=mz, colorscale=COLORSCALE_HIPSOMETRICO,
-        showscale=False, hoverinfo="none",  # "skip" tambem exclui o trace do hit-test de clique
+        showscale=False, hoverinfo="none", visible=False,  # padrao agora e Satelite, ver mais abaixo
     ), row=1, col=1)
 
     # poligonos do mapa geologico real (CPRM) no mapa em planta -- logo
@@ -488,6 +538,18 @@ def main():
             showlegend=False, visible=False, hoverinfo="none",
         ), row=1, col=1)
     idx_geo_mapa_fim = idx_geo_mapa_inicio + n_geo_mapa - 1
+
+    # satelite Esri (placeholder ate ter ortomosaico proprio) -- modo padrao
+    # do minimapa agora (visible=True), Hipsometria/Geologia comecam OFF.
+    print("Carregando imagem de satélite pro minimapa...")
+    raster_satelite_mapa = obter_satelite_utm_mapa()
+    idx_satelite_mapa = len(fig.data)
+    fig.add_trace(go.Image(
+        z=np.moveaxis(raster_satelite_mapa, 0, -1),
+        x0=X_MIN, dx=(X_MAX - X_MIN) / SATELITE_RESOLUCAO_MAPA,
+        y0=Y_MAX, dy=-(Y_MAX - Y_MIN) / SATELITE_RESOLUCAO_MAPA,
+        hoverinfo="none", visible=True,
+    ), row=1, col=1)
 
     # camadas de referencia do OpenStreetMap (rios, estradas, localidades) --
     # depois da geologia (desenham por cima da cor do terreno) e antes da
@@ -766,8 +828,8 @@ def main():
 
     COR_PAINEL = "#3A3A46"  # fundo cinza dos graficos (secao + barras), diferente do navy da pagina -- mais facil de ler
     eixo_escuro = dict(gridcolor="#54545f", zerolinecolor="#6a6a75", color=MARCA_CINZA_CLARO)
-    fig.update_xaxes(showticklabels=False, row=1, col=1, range=[X_MIN, X_MAX], autorange=False, scaleanchor="y1", scaleratio=1, constrain="domain")
-    fig.update_yaxes(showticklabels=False, row=1, col=1, range=[Y_MIN, Y_MAX], autorange=False, constrain="domain")
+    fig.update_xaxes(showticklabels=False, row=1, col=1, range=MAPA_RANGE_X, autorange=False, scaleanchor="y1", scaleratio=1, constrain="domain")
+    fig.update_yaxes(showticklabels=False, row=1, col=1, range=MAPA_RANGE_Y, autorange=False, constrain="domain")
     comprimento0_km = (angulos_info[0]["s_vals"][-1] - angulos_info[0]["s_vals"][0]) / 1000
     fig.update_xaxes(title_text="Distância ao longo da seção (km)", row=1, col=2, range=[0, comprimento0_km], autorange=False, **eixo_escuro)
     fig.update_yaxes(title_text="Elevação (m)", row=1, col=2, range=[-100, 1150], autorange=False, **eixo_escuro)
@@ -793,10 +855,15 @@ def main():
                 bgcolor=MARCA_ROXO_ESCURO, bordercolor=MARCA_ROXO, borderwidth=1.5,
                 font=dict(color=MARCA_CINZA_CLARO, family=MARCA_FONTE),
                 buttons=[dict(label=nome, method="skip") for nome, _ in ANGULOS] + [
+                    dict(label="Mapa: Satélite", method="restyle",
+                         args=[{"visible": [False] + [False] * n_geo_mapa + [True]},
+                               [idx_hipsometria_mapa] + list(range(idx_geo_mapa_inicio, idx_geo_mapa_fim + 1)) + [idx_satelite_mapa]]),
                     dict(label="Mapa: Hipsometria", method="restyle",
-                         args=[{"visible": [True] + [False] * n_geo_mapa}, [0] + list(range(idx_geo_mapa_inicio, idx_geo_mapa_fim + 1))]),
+                         args=[{"visible": [True] + [False] * n_geo_mapa + [False]},
+                               [idx_hipsometria_mapa] + list(range(idx_geo_mapa_inicio, idx_geo_mapa_fim + 1)) + [idx_satelite_mapa]]),
                     dict(label="Mapa: Geologia (CPRM real)", method="restyle",
-                         args=[{"visible": [False] + [True] * n_geo_mapa}, [0] + list(range(idx_geo_mapa_inicio, idx_geo_mapa_fim + 1))]),
+                         args=[{"visible": [False] + [True] * n_geo_mapa + [False]},
+                               [idx_hipsometria_mapa] + list(range(idx_geo_mapa_inicio, idx_geo_mapa_fim + 1)) + [idx_satelite_mapa]]),
                     dict(label="Tema: Escuro", method="skip"),
                     dict(label="Tema: Claro", method="skip"),
                 ],
@@ -887,7 +954,7 @@ def main():
     {marca_html}
     (function() {{
         var CX = {CX}, CY = {CY};
-        var RANGE_MAPA_X = [{X_MIN}, {X_MAX}], RANGE_MAPA_Y = [{Y_MIN}, {Y_MAX}];
+        var RANGE_MAPA_X = [{MAPA_RANGE_X[0]}, {MAPA_RANGE_X[1]}], RANGE_MAPA_Y = [{MAPA_RANGE_Y[0]}, {MAPA_RANGE_Y[1]}];
         var RANGE_SECAO_Y = [-100, 1150];
         var ANGULOS = [
         {angulos_js}
@@ -1281,13 +1348,13 @@ def main():
             if (Math.abs(ev.menu.y - (-0.38)) <= 0.01) {{
                 if (ev.active < ANGULOS.length) {{
                     irParaAngulo(ev.active);
-                }} else if (ev.active === ANGULOS.length + 2) {{
-                    aplicarTema('escuro');
                 }} else if (ev.active === ANGULOS.length + 3) {{
+                    aplicarTema('escuro');
+                }} else if (ev.active === ANGULOS.length + 4) {{
                     aplicarTema('claro');
                 }}
-                // botoes "Mapa: Hipsometria/Geologia" (ANGULOS.length, +1) usam
-                // method='restyle' proprio, nao precisam de JS aqui.
+                // botoes "Mapa: Satélite/Hipsometria/Geologia" (ANGULOS.length,
+                // +1, +2) usam method='restyle' proprio, nao precisam de JS aqui.
             }} else if (Math.abs(ev.menu.y - (-0.46)) <= 0.01) {{
                 // OSM (sempre indice 0) / Campo / Estrutura -- cada um agora e
                 // um botao so (liga/desliga), ordem = mesma ordem que entraram
