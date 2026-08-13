@@ -1083,6 +1083,14 @@ def main():
             estruturaAtiva = !estruturaAtiva;
             Plotly.restyle(gd, {{visible: estruturaAtiva}}, INDICES_ESTRUTURA);
             atualizarLabelBotaoMenu2(INDICES_CAMPO ? 2 : 1, estruturaAtiva ? 'Estrutura: ON' : 'Estrutura: OFF');
+            // recalcula pra posicao/angulo ATUAL do corte -- sem isso o simbolo
+            // so refletia a ultima vez que o slider/angulo mudou (podia ficar
+            // desatualizado se o usuario ligar Estrutura depois de mexer nisso
+            // com ela desligada, ou nunca ter tido dado calculado ainda).
+            if (estruturaAtiva) {{
+                var p = gd.layout.sliders[0].active;
+                atualizarEstrutural(anguloAtual, ANGULOS[anguloAtual].t[p]);
+            }}
         }}
 
         // elevacao real (interpolada) do terreno numa distancia x (km) do
