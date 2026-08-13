@@ -125,7 +125,7 @@ ANGULOS = [
     ("Vertical (S↔N)", 90.0),
     ("Diagonal (SE↔NO)", 135.0),
 ]
-PASSO_POSICAO = 1000.0  # espacamento fixo (m) entre posicoes do slider -- cobre o mapa todo
+PASSO_POSICAO = 500.0  # espacamento fixo (m) entre posicoes do slider -- cobre o mapa todo
 N_AMOSTRAS = 300
 RESOLUCAO_MAPA = 150
 
