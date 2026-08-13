@@ -71,7 +71,8 @@ CX, CY = (X_MIN + X_MAX) / 2, (Y_MIN + Y_MAX) / 2
 # recorte exato dos dados (X_MIN/X_MAX/Y_MIN/Y_MAX): dobra o span visivel
 # em cada eixo, mantendo o mesmo centro (equivalente a ~2 niveis de zoom
 # "pra fora" num mapa tipo Leaflet, onde cada nivel dobra a area visivel).
-ZOOM_INICIAL_FATOR = 2.0
+ZOOM_INICIAL_FATOR = 1.0  # revertido (12/08/2026) -- o pedido de zoom mais aberto era pro
+# Webmap (TAIO-WEBMAP), nao pra esse minimapa; volta pro recorte exato dos dados.
 MAPA_RANGE_X = [CX - (X_MAX - X_MIN) / 2 * ZOOM_INICIAL_FATOR, CX + (X_MAX - X_MIN) / 2 * ZOOM_INICIAL_FATOR]
 MAPA_RANGE_Y = [CY - (Y_MAX - Y_MIN) / 2 * ZOOM_INICIAL_FATOR, CY + (Y_MAX - Y_MIN) / 2 * ZOOM_INICIAL_FATOR]
 
