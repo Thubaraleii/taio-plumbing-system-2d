@@ -192,6 +192,8 @@ COLORSCALE_HIPSOMETRICO = [[i / (len(CORES_HIPSOMETRICAS) - 1), cor] for i, cor 
 ORDEM_FORMACOES = NOMES_CAMADAS + ["Depósito quaternário"]
 CORES_FORMACOES = CORES_CAMADAS + [COR_QUATERNARIO]
 CORES_FORMACOES_MAPA = dict(zip(ORDEM_FORMACOES, CORES_FORMACOES))
+CORES_FORMACOES_MAPA["Soleira"] = COR_SILL
+CORES_FORMACOES_MAPA["Dique"] = COR_DIQUE
 
 
 def montar_elevador():
@@ -493,8 +495,8 @@ def main():
     # padrao = hipsometria). So estatico, nao muda com o corte -- o mapa em
     # planta mostra a area inteira sempre.
     idx_geo_mapa_inicio = 1
-    gdf_formacoes = gdf_lito[gdf_lito["tipo"] == "sedimentar"]
-    print(f"Mapa geologico atualizado: {len(gdf_formacoes)} formacoes")
+    gdf_formacoes = gdf_lito
+    print(f"Mapa geologico atualizado: {len(gdf_formacoes)} polígonos (incl. sill/dique)")
     for row in gdf_formacoes.itertuples():
         gx, gy = poligono_para_scatter_xy(row.geometry)
         fig.add_trace(go.Scatter(
