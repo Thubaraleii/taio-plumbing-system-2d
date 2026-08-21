@@ -641,6 +641,59 @@ def main():
             legendrank=0, legendgroup="campo",
         ), row=1, col=2)
 
+    # geoquimica bruta real (QMC_TAIO_TODOS, 41 amostras), coloridas por
+    # classificacao Alto/Baixo-Ti -- no mapa em planta E como "pin" na SECAO
+    # (projetada na linha de corte atual, mesmo esquema dos Pontos de Campo/
+    # localidades OSM -- ver atualizarPins). Toggle proprio ("Geoquímica:
+    # ON/OFF"), independente de Campo/OSM. 3 amostras de referencia (sem
+    # ponto/corpo associado) ficam de fora por nao terem coordenada real; as
+    # demais com ponto_id mas sem utm_e/utm_n na planilha (ex.: ITC-44B) usam
+    # a coordenada do ponto de campo correspondente.
+    idx_geoq = None
+    idx_geoq_pin_linha = None
+    idx_geoq_pin_marcador = None
+    geoq_dados_secao = []
+    if GEOQUIMICA_CSV.exists():
+        df_geoq = pd.read_csv(GEOQUIMICA_CSV)
+        if PONTOS_CAMPO_GPKG.exists():
+            coord_campo = {row.ponto_id: (row.geometry.x, row.geometry.y) for row in gdf_campo.itertuples()}
+            for i, row in df_geoq.iterrows():
+                if pd.isna(row["utm_e"]) and pd.notna(row["ponto_id"]):
+                    xy = coord_campo.get(row["ponto_id"])
+                    if xy:
+                        df_geoq.loc[i, "utm_e"], df_geoq.loc[i, "utm_n"] = xy
+        df_geoq_coord = df_geoq.dropna(subset=["utm_e", "utm_n"])
+        cores_geoq = [COR_TI_ALTO if t == "Alto-Ti" else COR_TI_BAIXO for t in df_geoq_coord["classificacao_ti"]]
+        hover_geoq = [
+            f"<b>{row.amostra}</b> ({row.classificacao_ti})<br>{row.origem}<br>"
+            f"TiO₂ {row.TiO2:.2f}% · SiO₂ {row.SiO2:.1f}%"
+            for row in df_geoq_coord.itertuples()
+        ]
+        idx_geoq = len(fig.data)
+        fig.add_trace(go.Scatter(
+            x=df_geoq_coord["utm_e"], y=df_geoq_coord["utm_n"], mode="markers",
+            marker=dict(size=7, symbol="diamond", color=cores_geoq, line=dict(color=MARCA_CINZA_CLARO, width=0.5)),
+            text=hover_geoq, hoverinfo="text",
+            name="Geoquímica (Alto/Baixo-Ti)", showlegend=False, visible=False, legendgroup="geoq",
+        ), row=1, col=1)
+        geoq_dados_secao = [
+            (row.amostra, row.utm_e, row.utm_n, cor, hover)
+            for row, cor, hover in zip(df_geoq_coord.itertuples(), cores_geoq, hover_geoq)
+        ]
+        idx_geoq_pin_linha = len(fig.data)
+        fig.add_trace(go.Scatter(
+            x=[], y=[], mode="lines", line=dict(color=MARCA_CINZA_CLARO, width=1, dash="dot"),
+            showlegend=False, visible=False, hoverinfo="none", legendgroup="geoq",
+        ), row=1, col=2)
+        idx_geoq_pin_marcador = len(fig.data)
+        fig.add_trace(go.Scatter(
+            x=[], y=[], mode="markers+text", textposition="top center",
+            textfont=dict(size=9, color=MARCA_CINZA_CLARO, family=MARCA_FONTE),
+            marker=dict(symbol="diamond", line=dict(color=MARCA_CINZA_CLARO, width=1)),
+            name="Geoquímica (Alto/Baixo-Ti)", showlegend=True, visible=False, hoverinfo="text",
+            legendrank=0, legendgroup="geoq",
+        ), row=1, col=2)
+
     # dados estruturais -- duas categorias: "fratura_falha" (dado de campo,
     # tem dip medido de verdade) e "falha_ou_dique_ambiguo_relevo_negativo"
     # (lineamento de satelite, so azimute, dip_deg sempre NaN -- ja
@@ -769,7 +822,9 @@ def main():
     # NOTA: o risco estrutural NAO entra aqui -- suas traces sao adicionadas
     # DEPOIS do loop de ORDEM_TRACES (de proposito, pra desenhar por cima),
     # entao ficam fora do intervalo animado por frame, nao antes dele.
-    if idx_pontos_campo is not None:
+    if idx_geoq_pin_marcador is not None:
+        n_traces_fixas = idx_geoq_pin_marcador + 1
+    elif idx_pontos_campo is not None:
         n_traces_fixas = idx_campo_pin_marcador + 1
     else:
         n_traces_fixas = idx_osm_fim + 1
@@ -782,38 +837,6 @@ def main():
                 traces=list(range(n_traces_fixas, n_traces_fixas + len(ORDEM_TRACES))),
             ))
     fig.frames = frames
-
-    # geoquimica bruta real (QMC_TAIO_TODOS, 41 amostras), coloridas por
-    # classificacao Alto/Baixo-Ti -- so no mapa em planta (nao projetada na
-    # secao como os pontos de campo, e um dado tabular avulso, nao um
-    # catalogo de afloramento com posicao ao longo do corte). Trace fixa
-    # (fora do sistema de frames), toggle proprio. 3 amostras de referencia
-    # sem coordenada real ficam de fora; as com ponto_id mas sem utm_e/utm_n
-    # na planilha (ex.: ITC-44B) usam a coordenada do ponto de campo.
-    idx_geoq = None
-    if GEOQUIMICA_CSV.exists():
-        df_geoq = pd.read_csv(GEOQUIMICA_CSV)
-        if PONTOS_CAMPO_GPKG.exists():
-            coord_campo = {row.ponto_id: (row.geometry.x, row.geometry.y) for row in gdf_campo.itertuples()}
-            for i, row in df_geoq.iterrows():
-                if pd.isna(row["utm_e"]) and pd.notna(row["ponto_id"]):
-                    xy = coord_campo.get(row["ponto_id"])
-                    if xy:
-                        df_geoq.loc[i, "utm_e"], df_geoq.loc[i, "utm_n"] = xy
-        df_geoq_coord = df_geoq.dropna(subset=["utm_e", "utm_n"])
-        cores_geoq = [COR_TI_ALTO if t == "Alto-Ti" else COR_TI_BAIXO for t in df_geoq_coord["classificacao_ti"]]
-        hover_geoq = [
-            f"<b>{row.amostra}</b> ({row.classificacao_ti})<br>{row.origem}<br>"
-            f"TiO₂ {row.TiO2:.2f}% · SiO₂ {row.SiO2:.1f}%"
-            for row in df_geoq_coord.itertuples()
-        ]
-        idx_geoq = len(fig.data)
-        fig.add_trace(go.Scatter(
-            x=df_geoq_coord["utm_e"], y=df_geoq_coord["utm_n"], mode="markers",
-            marker=dict(size=7, symbol="diamond", color=cores_geoq, line=dict(color=MARCA_CINZA_CLARO, width=0.5)),
-            text=hover_geoq, hoverinfo="text",
-            name="Geoquímica (Alto/Baixo-Ti)", showlegend=False, visible=False,
-        ), row=1, col=1)
 
     # grafico de barras da espessura das formacoes na linha atual (em vez de
     # so texto -- mais facil de comparar magnitude entre as 5 formacoes,
@@ -920,6 +943,10 @@ def main():
         "{nome:%r, x:%.1f, y:%.1f, cor:%r, hover:%r}" % (str(nome), x, y, cor, hover)
         for nome, x, y, cor, hover in campo_dados_secao
     )
+    geoq_js = ",".join(
+        "{nome:%r, x:%.1f, y:%.1f, cor:%r, hover:%r}" % (str(nome), x, y, cor, hover)
+        for nome, x, y, cor, hover in geoq_dados_secao
+    )
     estrutural_js = ",".join(
         "{x:%.1f, y:%.1f, hover:%r}" % (x, y, hover) for x, y, hover in estrutural_dados_secao
     )
@@ -969,6 +996,7 @@ def main():
         var NOMES_CAMADAS = [{nomes_camadas_js}];
         var LOCALIDADES = [{localidades_js}];
         var PONTOS_CAMPO_SECAO = [{campo_js}];
+        var PONTOS_GEOQ_SECAO = [{geoq_js}];
         var ESTRUTURAL_SECAO = [{estrutural_js}];
         var PINS_RIOS = [
         {pins_rios_js}
@@ -978,6 +1006,7 @@ def main():
         ];
         var LIMIAR_PIN_M = 2000;  // so vira pin se a linha de corte passar a menos de 2km da localidade
         var LIMIAR_PIN_CAMPO_M = 400;  // pontos de campo sao 308 -- limiar bem mais apertado que localidades
+        var LIMIAR_PIN_GEOQ_M = 400;  // mesmo limiar apertado dos pontos de campo (38 amostras)
         var ALTURA_PIN_M = 60;  // marcador fica esse tanto (metros) acima da topografia real
         var TETO_PIN_M = 1100;  // ceiling absoluto -- evita que o pin (principalmente localidade,
                                  // que pode escalonar bem alto com o boost) suba pra fora do eixo Y
@@ -992,6 +1021,8 @@ def main():
         var IDX_PIN_ESTRADAS_MARCADOR = {idx_pin_traces["estradas_marcador"]};
         var IDX_CAMPO_PIN_LINHA = {idx_campo_pin_linha};
         var IDX_CAMPO_PIN_MARCADOR = {idx_campo_pin_marcador};
+        var IDX_GEOQ_PIN_LINHA = {idx_geoq_pin_linha};
+        var IDX_GEOQ_PIN_MARCADOR = {idx_geoq_pin_marcador};
         var IDX_ESTRUTURAL_RISCO = {idx_estrutural_risco};
         var IDX_ESTRUTURAL_SIMBOLO = {idx_estrutural_simbolo};
         var LIMIAR_ESTRUTURAL_M = 400;  // mesmo limiar apertado dos pontos de campo
@@ -1005,7 +1036,7 @@ def main():
         var INDICES_OSM = [{",".join(str(i) for i in range(idx_osm_inicio, idx_osm_fim + 1))}];
         var INDICES_CAMPO = {f"[{idx_pontos_campo},{idx_campo_pin_linha},{idx_campo_pin_marcador}]" if idx_pontos_campo is not None else "null"};
         var INDICES_ESTRUTURA = {f"[{idx_estrutural_risco},{idx_estrutural_simbolo}]" if idx_estrutural_risco is not None else "null"};
-        var INDICES_GEOQ = {f"[{idx_geoq}]" if idx_geoq is not None else "null"};
+        var INDICES_GEOQ = {f"[{idx_geoq},{idx_geoq_pin_linha},{idx_geoq_pin_marcador}]" if idx_geoq is not None else "null"};
         var anguloAtual = 0;
         var gd = document.getElementsByClassName('plotly-graph-div')[0];
 
@@ -1052,6 +1083,7 @@ def main():
             // tema claro (texto claro sobre fundo claro).
             var idxTextoPins = [IDX_PIN_LUGARES_MARCADOR, IDX_PIN_RIOS_MARCADOR, IDX_PIN_ESTRADAS_MARCADOR];
             if (IDX_CAMPO_PIN_MARCADOR !== null) {{ idxTextoPins.push(IDX_CAMPO_PIN_MARCADOR); }}
+            if (IDX_GEOQ_PIN_MARCADOR !== null) {{ idxTextoPins.push(IDX_GEOQ_PIN_MARCADOR); }}
             Plotly.restyle(gd, {{'textfont.color': t.texto}}, idxTextoPins);
             document.body.style.background = t.paper;
         }}
@@ -1223,7 +1255,21 @@ def main():
                 }}
             }});
 
-            var todos = lugares.concat(rios, estradas, campo);
+            // geoquimica: mesma projecao continua dos pontos de campo (limiar
+            // igual, LIMIAR_PIN_GEOQ_M) -- so 38 amostras, nao inunda a secao.
+            var geoq = [];
+            PONTOS_GEOQ_SECAO.forEach(function(pt) {{
+                var vx = pt.x - CX, vy = pt.y - CY;
+                var s = vx * info.dx + vy * info.dy;
+                var tLoc = vx * info.px + vy * info.py;
+                var perp = tLoc - offsetT;
+                if (Math.abs(perp) <= LIMIAR_PIN_GEOQ_M) {{
+                    var xKm = (s - info.s0) / 1000;
+                    geoq.push({{x: xKm, z: interpolarElevacao(xKm), nome: pt.nome, cor: pt.cor, hover: pt.hover, tipo: 'geoq'}});
+                }}
+            }});
+
+            var todos = lugares.concat(rios, estradas, campo, geoq);
             todos.sort(function(a, b) {{ return a.x - b.x; }});
             atribuirAlturas(todos);
 
@@ -1235,6 +1281,10 @@ def main():
                 todos.filter(function(pt) {{ return pt.tipo === 'estradas'; }}), '#4A4A4A', 'square', 9);
             restylarPins(IDX_CAMPO_PIN_LINHA, IDX_CAMPO_PIN_MARCADOR,
                 todos.filter(function(pt) {{ return pt.tipo === 'campo'; }}), '{COR_LITOLOGIA_PADRAO}', 'diamond', 9);
+            if (IDX_GEOQ_PIN_LINHA !== null) {{
+                restylarPins(IDX_GEOQ_PIN_LINHA, IDX_GEOQ_PIN_MARCADOR,
+                    todos.filter(function(pt) {{ return pt.tipo === 'geoq'; }}), '{COR_TI_ALTO}', 'diamond', 9);
+            }}
         }}
 
         // risco vertical fino cortando a secao -- projeta cada lineamento/
