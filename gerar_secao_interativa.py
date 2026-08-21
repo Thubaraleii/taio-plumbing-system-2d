@@ -45,6 +45,9 @@ PONTOS_CAMPO_GPKG = (
 PONTOS_ESTRUTURAIS_GPKG = (
     BASE.parent / "2_Banco_de_Dados" / "Unificação" / "GPKG_Novos" / "nuvem_pontos_direcoes.gpkg"
 )
+GEOQUIMICA_CSV = BASE.parent / "2_Banco_de_Dados" / "QMC_TAIO_TODOS" / "geoquimica_dashboard.csv"
+COR_TI_ALTO = "#E67E22"
+COR_TI_BAIXO = "#2E86C1"
 LOGO_PATH = Path(__file__).parent / "assets" / "logo_gstech.jpg"
 OUT_HTML = Path(__file__).parent / "secao_interativa.html"
 
@@ -780,6 +783,38 @@ def main():
             ))
     fig.frames = frames
 
+    # geoquimica bruta real (QMC_TAIO_TODOS, 41 amostras), coloridas por
+    # classificacao Alto/Baixo-Ti -- so no mapa em planta (nao projetada na
+    # secao como os pontos de campo, e um dado tabular avulso, nao um
+    # catalogo de afloramento com posicao ao longo do corte). Trace fixa
+    # (fora do sistema de frames), toggle proprio. 3 amostras de referencia
+    # sem coordenada real ficam de fora; as com ponto_id mas sem utm_e/utm_n
+    # na planilha (ex.: ITC-44B) usam a coordenada do ponto de campo.
+    idx_geoq = None
+    if GEOQUIMICA_CSV.exists():
+        df_geoq = pd.read_csv(GEOQUIMICA_CSV)
+        if PONTOS_CAMPO_GPKG.exists():
+            coord_campo = {row.ponto_id: (row.geometry.x, row.geometry.y) for row in gdf_campo.itertuples()}
+            for i, row in df_geoq.iterrows():
+                if pd.isna(row["utm_e"]) and pd.notna(row["ponto_id"]):
+                    xy = coord_campo.get(row["ponto_id"])
+                    if xy:
+                        df_geoq.loc[i, "utm_e"], df_geoq.loc[i, "utm_n"] = xy
+        df_geoq_coord = df_geoq.dropna(subset=["utm_e", "utm_n"])
+        cores_geoq = [COR_TI_ALTO if t == "Alto-Ti" else COR_TI_BAIXO for t in df_geoq_coord["classificacao_ti"]]
+        hover_geoq = [
+            f"<b>{row.amostra}</b> ({row.classificacao_ti})<br>{row.origem}<br>"
+            f"TiO₂ {row.TiO2:.2f}% · SiO₂ {row.SiO2:.1f}%"
+            for row in df_geoq_coord.itertuples()
+        ]
+        idx_geoq = len(fig.data)
+        fig.add_trace(go.Scatter(
+            x=df_geoq_coord["utm_e"], y=df_geoq_coord["utm_n"], mode="markers",
+            marker=dict(size=7, symbol="diamond", color=cores_geoq, line=dict(color=MARCA_CINZA_CLARO, width=0.5)),
+            text=hover_geoq, hoverinfo="text",
+            name="Geoquímica (Alto/Baixo-Ti)", showlegend=False, visible=False,
+        ), row=1, col=1)
+
     # grafico de barras da espessura das formacoes na linha atual (em vez de
     # so texto -- mais facil de comparar magnitude entre as 5 formacoes,
     # bar chart e a escolha certa aqui pq sao valores em metros comparaveis,
@@ -843,7 +878,8 @@ def main():
                 font=dict(color=MARCA_CINZA_CLARO, family=MARCA_FONTE),
                 buttons=[dict(label="OSM: OFF", method="skip")]
                 + ([dict(label="Campo: OFF", method="skip")] if idx_pontos_campo is not None else [])
-                + ([dict(label="Estrutura: OFF", method="skip")] if idx_estrutural_risco is not None else []),
+                + ([dict(label="Estrutura: OFF", method="skip")] if idx_estrutural_risco is not None else [])
+                + ([dict(label="Geoquímica: OFF", method="skip")] if idx_geoq is not None else []),
             ),
         ],
         sliders=[dict(
@@ -969,6 +1005,7 @@ def main():
         var INDICES_OSM = [{",".join(str(i) for i in range(idx_osm_inicio, idx_osm_fim + 1))}];
         var INDICES_CAMPO = {f"[{idx_pontos_campo},{idx_campo_pin_linha},{idx_campo_pin_marcador}]" if idx_pontos_campo is not None else "null"};
         var INDICES_ESTRUTURA = {f"[{idx_estrutural_risco},{idx_estrutural_simbolo}]" if idx_estrutural_risco is not None else "null"};
+        var INDICES_GEOQ = {f"[{idx_geoq}]" if idx_geoq is not None else "null"};
         var anguloAtual = 0;
         var gd = document.getElementsByClassName('plotly-graph-div')[0];
 
@@ -1058,6 +1095,15 @@ def main():
                 var p = gd.layout.sliders[0].active;
                 atualizarEstrutural(anguloAtual, ANGULOS[anguloAtual].t[p]);
             }}
+        }}
+
+        var geoquimicaAtiva = false;
+        function alternarGeoquimica() {{
+            if (!INDICES_GEOQ) return;
+            geoquimicaAtiva = !geoquimicaAtiva;
+            Plotly.restyle(gd, {{visible: geoquimicaAtiva}}, INDICES_GEOQ);
+            var indiceBotao = (INDICES_CAMPO ? 1 : 0) + (INDICES_ESTRUTURA ? 1 : 0) + 1;
+            atualizarLabelBotaoMenu2(indiceBotao, geoquimicaAtiva ? 'Geoquímica: ON' : 'Geoquímica: OFF');
         }}
 
         // elevacao real (interpolada) do terreno numa distancia x (km) do
@@ -1344,6 +1390,10 @@ def main():
                 if (INDICES_ESTRUTURA) {{
                     indice++;
                     if (ev.active === indice) {{ alternarEstrutura(); return setTimeout(resetarEixosPadrao, 60); }}
+                }}
+                if (INDICES_GEOQ) {{
+                    indice++;
+                    if (ev.active === indice) {{ alternarGeoquimica(); return setTimeout(resetarEixosPadrao, 60); }}
                 }}
             }}
             // QUALQUER clique de botao (linha 1 ou 2) pode disparar um redraw
