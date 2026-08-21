@@ -21,20 +21,21 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import rasterio.features
-from affine import Affine
 from plotly.subplots import make_subplots
 from rasterio.transform import from_bounds
 from rasterio.warp import Resampling, reproject
 from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator, griddata
-from shapely.geometry import LineString, Point, box, shape as shapely_shape
+from shapely.geometry import LineString, Point, box
 from shapely.geometry.polygon import orient
-from shapely.ops import unary_union
 
 BASE = Path(__file__).parent.parent
 TOPO_NPY = BASE / "dados_entrada" / "topografia_drone" / "topografia_xyz.npy"
-POLIGONO_REFERENCIA = BASE.parent / "2_Banco_de_Dados" / "dados_base" / "poligon_intrusiva.shp"
-POLIGONOS_CPRM_GEOJSON = BASE.parent / "2_Banco_de_Dados" / "saida_processada" / "formacoes_cprm_poligonos.geojson"
+# litologia_processada.shp (ETL: 2_Banco_de_Dados/scripts_etl/processar_litologia_atualizada.py)
+# substitui o mapa geologico real (CPRM) + o poligon_intrusiva.shp antigo --
+# um shp so, com sill/dique redigitalizados (coluna "formacao") e as 6
+# formacoes sedimentares, incl. deposito quaternario (coluna "tipo" ==
+# "sedimentar"/"intrusiva").
+LITOLOGIA_ATUALIZADA = BASE.parent / "2_Banco_de_Dados" / "dados_base" / "litologia_processada.shp"
 OSM_RIOS_GEOJSON = BASE.parent / "2_Banco_de_Dados" / "saida_processada" / "osm_rios.geojson"
 OSM_ESTRADAS_GEOJSON = BASE.parent / "2_Banco_de_Dados" / "saida_processada" / "osm_estradas.geojson"
 OSM_LUGARES_GEOJSON = BASE.parent / "2_Banco_de_Dados" / "saida_processada" / "osm_lugares.geojson"
@@ -183,15 +184,13 @@ CORES_HIPSOMETRICAS = ["#4F9AA8", "#9FC1A3", "#D8C88C", "#C6924A", "#A66A2C"]  #
 # (10/08/2026) -- baixo->alto agora vai de azul/verde pra marrom (era o oposto)
 COLORSCALE_HIPSOMETRICO = [[i / (len(CORES_HIPSOMETRICAS) - 1), cor] for i, cor in enumerate(CORES_HIPSOMETRICAS)]
 
-# mapa geologico real (CPRM) como alternativa a hipsometria no mapa em planta
+# mapa geologico atualizado como alternativa a hipsometria no mapa em planta
 # -- mesmos poligonos/paleta de ../visualizacao_web/gerar_visualizador_3d.py
-# (gerados por ../../2_Banco_de_Dados/scripts_etl/exportar_poligonos_cprm.py).
-# Aqui e so contorno 2D (fill="toself" do Scatter), sem drapeado/triangulacao
-# -- o mapa em planta nao tem relevo 3D pra seguir.
-ORDEM_FORMACOES = NOMES_CAMADAS + [
-    "Serra Geral (sill/dique)", "Aluvião quaternário", "K_TPS_SILL", "K_TPS_DIQUE", "Outros",
-]
-CORES_FORMACOES = CORES_CAMADAS + ["#A63D2F", "#D9CB82", COR_SILL, COR_DIQUE, "#CCCCCC"]
+# (litologia_processada.shp, ver LITOLOGIA_ATUALIZADA acima). Aqui e so
+# contorno 2D (fill="toself" do Scatter), sem drapeado/triangulacao -- o
+# mapa em planta nao tem relevo 3D pra seguir.
+ORDEM_FORMACOES = NOMES_CAMADAS + ["Depósito quaternário"]
+CORES_FORMACOES = CORES_CAMADAS + [COR_QUATERNARIO]
 CORES_FORMACOES_MAPA = dict(zip(ORDEM_FORMACOES, CORES_FORMACOES))
 
 
@@ -293,27 +292,6 @@ def poligono_para_scatter_xy(geom):
             xs.extend(coords[:, 0])
             ys.extend(coords[:, 1])
     return np.array(xs), np.array(ys)
-
-
-def poligono_quaternario_mapa(mx, my, mz):
-    """Poligoniza a mascara do deposito quaternario (mesmo limiar/fonte real
-    da secao -- QUATERNARIO_LIMIAR sobre a topografia real) na resolucao da
-    grade do mapa (mx,my,mz), pra desenhar no mapa em planta junto com o
-    resto do mapa geologico (a CPRM/litologia nao mapeia aluviao dentro
-    dessa extensao -- fica de fora do geojson -- entao usa a mesma logica
-    ja usada na secao, nao um dado novo)."""
-    mask = (mz <= QUATERNARIO_LIMIAR)
-    if not mask.any():
-        return None
-    n_y, n_x = mask.shape
-    dx = (X_MAX - X_MIN) / (n_x - 1)
-    dy = (Y_MAX - Y_MIN) / (n_y - 1)
-    transform = Affine.translation(X_MIN - dx / 2, Y_MIN - dy / 2) * Affine.scale(dx, dy)
-    formas = rasterio.features.shapes(mask.astype(np.uint8), mask=mask, transform=transform)
-    poligonos = [shapely_shape(geom) for geom, valor in formas if valor == 1]
-    if not poligonos:
-        return None
-    return unary_union(poligonos)
 
 
 def cobertura_bbox(vx, vy, cx, cy, fator=1.0):
@@ -434,9 +412,9 @@ LEGENDRANK_OSM = {"lugares": 1, "rios": 2, "estradas": 3}
 
 def main():
     elevacao, xyz = montar_elevador()
-    gdf = gpd.read_file(POLIGONO_REFERENCIA)
-    sill_geom = gdf[gdf["tipo"] == "Soleira"].geometry.union_all()
-    dique_geom = gdf[gdf["tipo"] == "Dique"].geometry.union_all()
+    gdf_lito = gpd.read_file(LITOLOGIA_ATUALIZADA)
+    sill_geom = gdf_lito[gdf_lito["formacao"] == "Soleira"].geometry.union_all()
+    dique_geom = gdf_lito[gdf_lito["formacao"] == "Dique"].geometry.union_all()
 
     print("Montando mapa em planta...")
     mx, my = np.meshgrid(np.linspace(X_MIN, X_MAX, RESOLUCAO_MAPA), np.linspace(Y_MIN, Y_MAX, RESOLUCAO_MAPA))
@@ -515,8 +493,8 @@ def main():
     # padrao = hipsometria). So estatico, nao muda com o corte -- o mapa em
     # planta mostra a area inteira sempre.
     idx_geo_mapa_inicio = 1
-    gdf_formacoes = gpd.read_file(POLIGONOS_CPRM_GEOJSON)
-    print(f"Mapa geologico real: {len(gdf_formacoes)} formacoes")
+    gdf_formacoes = gdf_lito[gdf_lito["tipo"] == "sedimentar"]
+    print(f"Mapa geologico atualizado: {len(gdf_formacoes)} formacoes")
     for row in gdf_formacoes.itertuples():
         gx, gy = poligono_para_scatter_xy(row.geometry)
         fig.add_trace(go.Scatter(
@@ -524,20 +502,7 @@ def main():
             fillcolor=CORES_FORMACOES_MAPA.get(row.formacao, "#CCCCCC"),
             name=row.formacao, showlegend=False, visible=False, hoverinfo="none",
         ), row=1, col=1)
-
-    # deposito quaternario tambem no mapa em planta -- a litologia CPRM nao
-    # mapeia aluviao dentro dessa extensao (fica de fora do geojson), entao
-    # poligoniza a MESMA mascara/limiar real ja usada na secao (nao e um
-    # dado novo, so o mesmo proxy representado como poligono).
-    poli_quat = poligono_quaternario_mapa(mx, my, mz)
-    n_geo_mapa = len(gdf_formacoes) + (1 if poli_quat is not None else 0)
-    if poli_quat is not None:
-        gx, gy = poligono_para_scatter_xy(poli_quat)
-        fig.add_trace(go.Scatter(
-            x=gx, y=gy, mode="lines", line=dict(width=0), fill="toself",
-            fillcolor=COR_QUATERNARIO, name="Depósito quaternário",
-            showlegend=False, visible=False, hoverinfo="none",
-        ), row=1, col=1)
+    n_geo_mapa = len(gdf_formacoes)
     idx_geo_mapa_fim = idx_geo_mapa_inicio + n_geo_mapa - 1
 
     # satelite Esri (placeholder ate ter ortomosaico proprio) -- modo padrao
@@ -862,7 +827,7 @@ def main():
                     dict(label="Mapa: Hipsometria", method="restyle",
                          args=[{"visible": [True] + [False] * n_geo_mapa + [False]},
                                [idx_hipsometria_mapa] + list(range(idx_geo_mapa_inicio, idx_geo_mapa_fim + 1)) + [idx_satelite_mapa]]),
-                    dict(label="Mapa: Geologia (CPRM real)", method="restyle",
+                    dict(label="Mapa: Geologia (atualizado)", method="restyle",
                          args=[{"visible": [False] + [True] * n_geo_mapa + [False]},
                                [idx_hipsometria_mapa] + list(range(idx_geo_mapa_inicio, idx_geo_mapa_fim + 1)) + [idx_satelite_mapa]]),
                     dict(label="Tema: Escuro", method="skip"),
