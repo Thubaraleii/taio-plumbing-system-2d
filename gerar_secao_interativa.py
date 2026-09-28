@@ -330,11 +330,8 @@ def amostrar_linha(cx_linha, cy_linha, dx, dy, s_vals, elevacao, sill_geom, diqu
                 for m in range(len(PROFUNDIDADE_CAMADAS))]
 
     dados = {}
-    espessuras = []
     for k in range(len(PROFUNDIDADE_CAMADAS) - 1):
         dados[f"camada{k}"] = banda_toself(dists, contatos[k], contatos[k + 1])
-        espessuras.append(float(np.mean(contatos[k] - contatos[k + 1])))  # media ao longo da linha (m)
-    dados["espessuras"] = espessuras
 
     dados["quaternario"] = banda_toself(dists, terreno, terreno - QUATERNARIO_ESPESSURA, terreno <= QUATERNARIO_LIMIAR)
     # base do sill = topo da Serra Alta (contatos[1], mesmo plano de mergulho +
@@ -478,10 +475,9 @@ def main():
     inicial = todas_secoes[0][n_pos_inicial // 2]
 
     fig = make_subplots(
-        rows=2, cols=2, column_widths=[0.22, 0.78], row_heights=[0.76, 0.24],
-        horizontal_spacing=0.06, vertical_spacing=0.14,
-        specs=[[{}, {}], [{"colspan": 2}, None]],
-        subplot_titles=("Mapa (clique p/ mover)", "Seção transversal", "Espessura das formações na linha atual"),
+        rows=1, cols=2, column_widths=[0.22, 0.78],
+        horizontal_spacing=0.06,
+        subplot_titles=("Mapa (clique p/ mover)", "Seção transversal"),
     )
     for ann in fig.layout.annotations:  # titulos dos subplots -- estiliza pra tema escuro antes de adicionar o resto
         ann.font = dict(color=MARCA_CINZA_CLARO, size=14, family=MARCA_FONTE)
@@ -838,20 +834,6 @@ def main():
             ))
     fig.frames = frames
 
-    # grafico de barras da espessura das formacoes na linha atual (em vez de
-    # so texto -- mais facil de comparar magnitude entre as 5 formacoes,
-    # bar chart e a escolha certa aqui pq sao valores em metros comparaveis,
-    # nao proporcao de um todo tipo pizza). Atualizado via JS (Plotly.restyle
-    # em y/text) quando o angulo/posicao muda -- nao faz parte do sistema de
-    # frames do corte, e uma trace fixa a parte.
-    idx_trace_barra = len(fig.data)
-    fig.add_trace(go.Bar(
-        x=NOMES_CAMADAS, y=inicial["espessuras"], marker_color=CORES_CAMADAS,
-        marker_line=dict(color=MARCA_ROXO, width=1),
-        text=[f"{e:.0f}m" for e in inicial["espessuras"]], textposition="outside",
-        textfont=dict(color=MARCA_CINZA_CLARO), showlegend=False, hoverinfo="none",
-    ), row=2, col=1)
-
     COR_PAINEL = "#3A3A46"  # fundo cinza dos graficos (secao + barras), diferente do navy da pagina -- mais facil de ler
     eixo_escuro = dict(gridcolor="#54545f", zerolinecolor="#6a6a75", color=MARCA_CINZA_CLARO)
     fig.update_xaxes(showticklabels=False, row=1, col=1, range=MAPA_RANGE_X, autorange=False, scaleanchor="y1", scaleratio=1, constrain="domain")
@@ -859,8 +841,6 @@ def main():
     comprimento0_km = (angulos_info[0]["s_vals"][-1] - angulos_info[0]["s_vals"][0]) / 1000
     fig.update_xaxes(title_text="Distância ao longo da seção (km)", row=1, col=2, range=[0, comprimento0_km], autorange=False, **eixo_escuro)
     fig.update_yaxes(title_text="Elevação (m)", row=1, col=2, range=[-100, 1150], autorange=False, **eixo_escuro)
-    fig.update_xaxes(row=2, col=1, **eixo_escuro)
-    fig.update_yaxes(title_text="Espessura (m)", row=2, col=1, range=[0, 400], **eixo_escuro)
 
     fig.update_layout(
         title=dict(
@@ -931,11 +911,6 @@ def main():
         )
         for info in angulos_info
     )
-    espessuras_js = ",\n        ".join(
-        "[" + ",\n         ".join("[" + ",".join(f"{e:.1f}" for e in secao["espessuras"]) + "]" for secao in secoes_angulo) + "]"
-        for secoes_angulo in todas_secoes
-    )
-    nomes_camadas_js = ",".join(f"'{nome}'" for nome in NOMES_CAMADAS)
     localidades_js = ",".join(
         "{nome:%r, x:%.1f, y:%.1f}" % (str(nome), x, y) for nome, x, y in localidades_dados
     )
@@ -990,10 +965,6 @@ def main():
         var ANGULOS = [
         {angulos_js}
         ];
-        var ESPESSURAS = [
-        {espessuras_js}
-        ];
-        var NOMES_CAMADAS = [{nomes_camadas_js}];
         var LOCALIDADES = [{localidades_js}];
         var PONTOS_CAMPO_SECAO = [{campo_js}];
         var PONTOS_GEOQ_SECAO = [{geoq_js}];
@@ -1011,7 +982,6 @@ def main():
         var TETO_PIN_M = 1100;  // ceiling absoluto -- evita que o pin (principalmente localidade,
                                  // que pode escalonar bem alto com o boost) suba pra fora do eixo Y
                                  // (range vai ate 1150) e "suma" da visualizacao
-        var IDX_TRACE_BARRA = {idx_trace_barra};
         var IDX_TRACE_TERRENO = {idx_trace_terreno};
         var IDX_PIN_LUGARES_LINHA = {idx_pin_traces["lugares_linha"]};
         var IDX_PIN_LUGARES_MARCADOR = {idx_pin_traces["lugares_marcador"]};
@@ -1032,7 +1002,7 @@ def main():
         var OFFSET_SIMBOLO_M = 80;  // deslocamento vertical entre as duas metades (efeito "fatiado")
         var IDX_ANOTACAO_DIR0 = {idx_anotacao_dir0};
         var IDX_ANOTACAO_DIR1 = {idx_anotacao_dir1};
-        var IDX_ANOTACOES_SUBTITULO = [0, 1, 2];
+        var IDX_ANOTACOES_SUBTITULO = [0, 1];
         var INDICES_OSM = [{",".join(str(i) for i in range(idx_osm_inicio, idx_osm_fim + 1))}];
         var INDICES_CAMPO = {f"[{idx_pontos_campo},{idx_campo_pin_linha},{idx_campo_pin_marcador}]" if idx_pontos_campo is not None else "null"};
         var INDICES_ESTRUTURA = {f"[{idx_estrutural_risco},{idx_estrutural_simbolo}]" if idx_estrutural_risco is not None else "null"};
@@ -1069,15 +1039,12 @@ def main():
                 'sliders[0].currentvalue.font.color': t.texto,
                 'xaxis2.color': t.texto, 'xaxis2.gridcolor': t.grid, 'xaxis2.zerolinecolor': t.zerogrid,
                 'yaxis2.color': t.texto, 'yaxis2.gridcolor': t.grid, 'yaxis2.zerolinecolor': t.zerogrid,
-                'xaxis3.color': t.texto, 'xaxis3.gridcolor': t.grid, 'xaxis3.zerolinecolor': t.zerogrid,
-                'yaxis3.color': t.texto, 'yaxis3.gridcolor': t.grid, 'yaxis3.zerolinecolor': t.zerogrid,
             }};
             IDX_ANOTACOES_SUBTITULO.concat([IDX_ANOTACAO_DIR0, IDX_ANOTACAO_DIR1]).forEach(function(idx) {{
                 patch['annotations[' + idx + '].font.color'] = t.texto;
             }});
             Plotly.relayout(gd, patch);
             Plotly.restyle(gd, {{'line.color': t.texto}}, [IDX_TRACE_TERRENO]);
-            Plotly.restyle(gd, {{'textfont.color': t.texto}}, [IDX_TRACE_BARRA]);
             // rotulos dos pins (nome da localidade/rio/estrada na secao) tambem
             // tem cor propria fixa na criacao -- sem isso ficavam ilegiveis no
             // tema claro (texto claro sobre fundo claro).
@@ -1346,9 +1313,6 @@ def main():
         }}
 
         function atualizarEspessuras(a, p) {{
-            var vals = ESPESSURAS[a][p];
-            var rotulos = vals.map(function(v) {{ return Math.round(v) + 'm'; }});
-            Plotly.restyle(gd, {{y: [vals], text: [rotulos]}}, [IDX_TRACE_BARRA]);
             atualizarPins(a, p);
             atualizarEstrutural(a, ANGULOS[a].t[p]);
         }}
