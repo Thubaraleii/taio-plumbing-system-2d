@@ -140,7 +140,7 @@ RESOLUCAO_MAPA = 150
 # na borda leste (uso 80m), Teresina 300-400m na borda leste (uso 350m).
 # Mesmos valores/cores de ../visualizacao_web/gerar_visualizador_3d.py.
 NOMES_CAMADAS = ["Teresina", "Serra Alta", "Irati", "Palermo", "Rio Bonito"]
-CORES_CAMADAS = ["#D6C79A", "#8C8C86", "#3E362C", "#B5AE93", "#C9A66B"]
+CORES_CAMADAS = ["#F8B6A0", "#FB8D74", "#C8625D", "#FF7757", "#E3644F"]  # paleta do mapa geologico (Teresina, Serra Alta, Irati, Palermo, Rio Bonito)
 PROFUNDIDADE_CAMADAS = [0.0, 350.0, 430.0, 485.0, 585.0, 854.0]
 
 # trend regional: plano bruto do contato real Teresina/Serra Alta (CPRM,
@@ -149,9 +149,9 @@ PROFUNDIDADE_CAMADAS = [0.0, 350.0, 430.0, 485.0, 585.0, 854.0]
 TREND_A, TREND_B = 0.01034, -0.00025
 TREND_X0, TREND_Y0 = 592300.0, 7015058.8
 Z_REF_TILT = 1053.5  # ancora o plano em boundary(prof=350) = 703.5 (media real do contato Teresina/Serra Alta)
-COR_SILL = "#A63D2F"
-COR_DIQUE = "#1B4332"  # verde escuro
-COR_QUATERNARIO = "#D9CB82"
+COR_SILL = "#49B18C"
+COR_DIQUE = "#AFEC7C"  # verde escuro
+COR_QUATERNARIO = "#FFFBC2"
 # pontos de campo (catalogo unificado, ver PONTOS_CAMPO_GPKG) -- mesma paleta
 # das formacoes/sill/dique quando a litologia bate, cinza neutro pro resto.
 CORES_LITOLOGIA_CAMPO = {
