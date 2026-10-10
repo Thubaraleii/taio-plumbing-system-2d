@@ -894,7 +894,7 @@ def main():
             fig.update_layout(**{
                 f"xaxis{eixo}": dict(domain=dom_x, anchor=f"y{eixo}", visible=False, range=[0, comp_km], autorange=False,
                                     title_text="Distância (km)", **eixo_escuro_stack),
-                f"yaxis{eixo}": dict(domain=[topo - altura, topo], anchor=f"x{eixo}", visible=False, range=[-100, 1150],
+                f"yaxis{eixo}": dict(domain=[0.0, 0.0001], anchor=f"x{eixo}", visible=False, range=[-100, 1150],
                                     autorange=False, title_text="Elev. (m)", **eixo_escuro_stack),
             })
             primeiro = len(fig.data)
@@ -914,7 +914,7 @@ def main():
             fig.add_annotation(text=f"<b>{info['nome']}</b>", x=0.0, y=1.0, xref=f"x{eixo} domain", yref=f"y{eixo} domain",
                                showarrow=False, xanchor="left", yanchor="bottom", visible=False,
                                font=dict(size=12, color=MARCA_CINZA_CLARO))
-            empilhado.append((eixo, primeiro, len(fig.data) - primeiro, len(fig.layout.annotations) - 1))
+            empilhado.append((eixo, primeiro, len(fig.data) - primeiro, len(fig.layout.annotations) - 1, topo - altura, topo))
 
     COR_PAINEL = "#3A3A46"  # fundo cinza dos graficos (secao + barras), diferente do navy da pagina -- mais facil de ler
     eixo_escuro = dict(gridcolor="#54545f", zerolinecolor="#6a6a75", color=MARCA_CINZA_CLARO)
@@ -1114,7 +1114,7 @@ def main():
         var INDICES_CAMPO = {f"[{idx_pontos_campo},{idx_campo_pin_linha},{idx_campo_pin_marcador}]" if idx_pontos_campo is not None else "null"};
         var INDICES_ESTRUTURA = {f"[{idx_estrutural_risco},{idx_estrutural_simbolo}]" if idx_estrutural_risco is not None else "null"};
         var INDICES_GEOQ = {f"[{idx_geoq},{idx_geoq_pin_linha},{idx_geoq_pin_marcador}]" if idx_geoq is not None else "null"};
-        var EMPILHADO = [{",".join("{eixo:%d,ini:%d,n:%d,ann:%d}" % e for e in empilhado)}];
+        var EMPILHADO = [{",".join("{eixo:%d,ini:%d,n:%d,ann:%d,d0:%.4f,d1:%.4f}" % e for e in empilhado)}];
         var N_LIVRES = {len(ANGULOS)};  // angulos livres (com slider); os demais sao tracados fixos
         var anguloAtual = 0;
         var gd = document.getElementsByClassName('plotly-graph-div')[0];
@@ -1502,6 +1502,7 @@ def main():
             EMPILHADO.forEach(function(e) {{
                 var idx = []; for (var k = 0; k < e.n; k++) idx.push(e.ini + k);
                 Plotly.restyle(gd, {{visible: ligar}}, idx);
+                patch['yaxis' + e.eixo + '.domain'] = ligar ? [e.d0, e.d1] : [0, 0.0001];
                 patch['xaxis' + e.eixo + '.visible'] = ligar; patch['yaxis' + e.eixo + '.visible'] = ligar;
                 patch['annotations[' + e.ann + '].visible'] = ligar;
             }});
