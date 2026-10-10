@@ -932,10 +932,9 @@ def main():
         ),
         paper_bgcolor=MARCA_NAVY, plot_bgcolor=COR_PAINEL,
         font=dict(family=MARCA_FONTE, color=MARCA_CINZA_CLARO),
-        height=980,
         legend=dict(x=1.01, y=0.94, bgcolor="rgba(45,10,74,0.75)", bordercolor=MARCA_ROXO, borderwidth=1,
                     font=dict(color=MARCA_CINZA_CLARO)),
-        margin=dict(l=50, r=180, t=300, b=70),
+        margin=dict(l=60, r=190, t=40, b=60),
         updatemenus=[
             dict(
                 type="buttons", direction="left", showactive=False,
@@ -1440,6 +1439,7 @@ def main():
         }}
 
         function atualizarEspessuras(a, p) {{
+            if (typeof sincronizarSlider === "function") sincronizarSlider();
             atualizarPins(a, p);
             atualizarEstrutural(a, ANGULOS[a].t[p]);
         }}
@@ -1597,6 +1597,115 @@ def main():
             setTimeout(function() {{ atualizarEspessuras(anguloAtual, gd.layout.sliders[0].active); }}, 0);
         }});
 
+        // ---------- barra de ferramentas no topo (HTML), plot ocupa o resto da pagina ----------
+        var barra = document.createElement('div');
+        barra.id = 'barra-ferramentas';
+        var css = document.createElement('style');
+        css.textContent =
+            'html,body{{height:100%;margin:0;overflow:hidden}}' +
+            '#barra-ferramentas{{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:8px 84px 8px 16px;' +
+            'background:var(--barra-bg,#262B3D);color:var(--barra-txt,#F2F4F5);font:12px {MARCA_FONTE};' +
+            'border-bottom:2px solid {MARCA_ROXO};box-sizing:border-box}}' +
+            '#barra-ferramentas h1{{font-size:15px;margin:0 8px 0 0;white-space:nowrap}} #barra-ferramentas h1 b{{color:{MARCA_ROXO}}}' +
+            '#barra-ferramentas .grupo{{display:flex;align-items:center;gap:6px}}' +
+            '#barra-ferramentas label{{font-size:10px;text-transform:uppercase;letter-spacing:.06em;opacity:.7}}' +
+            '#barra-ferramentas select,#barra-ferramentas button{{background:var(--barra-btn,#1B263B);color:inherit;' +
+            'border:1px solid {MARCA_ROXO};border-radius:5px;padding:4px 9px;font:inherit;cursor:pointer}}' +
+            '#barra-ferramentas button.ativo{{background:{MARCA_ROXO};color:#fff}}' +
+            '#barra-ferramentas input[type=range]{{width:220px;accent-color:{MARCA_ROXO}}}' +
+            '#barra-ferramentas .rotulo-pos{{min-width:60px;font-weight:600}}';
+        document.head.appendChild(css);
+        function el(tag, props, filhos) {{
+            var e = document.createElement(tag);
+            Object.keys(props || {{}}).forEach(function(k) {{ e[k] = props[k]; }});
+            (filhos || []).forEach(function(f) {{ e.appendChild(f); }});
+            return e;
+        }}
+        function grupo(rotulo, conteudo) {{
+            var g = el('div', {{className: 'grupo'}}, [el('label', {{textContent: rotulo}})].concat(conteudo));
+            barra.appendChild(g); return g;
+        }}
+        var menus = gd.layout.updatemenus;
+        barra.appendChild(el('h1', {{innerHTML: '<b>Seção 2D interativa</b> — Taió'}}));
+
+        var selLinha = el('select', {{}});
+        for (var i = 0; i < N_LIVRES; i++) selLinha.appendChild(el('option', {{value: i, textContent: menus[0].buttons[i].label}}));
+        var tracadoLabels = menus.length > 2 ? menus[2].buttons : [];
+        tracadoLabels.forEach(function(b, k) {{
+            var v = k >= EMPILHADO.length ? 'todos' : N_LIVRES + k;
+            selLinha.appendChild(el('option', {{value: v, textContent: b.label}}));
+        }});
+        selLinha.onchange = function() {{
+            if (selLinha.value === 'todos') {{ mostrarEmpilhado(true); sincronizarSlider(); }}
+            else {{ irParaAngulo(parseInt(selLinha.value, 10)); }}
+            setTimeout(resetarEixosPadrao, 60);
+        }};
+        grupo('Linha de corte', [selLinha]);
+
+        var selMapa = el('select', {{}});
+        for (var m = 0; m < 3; m++) selMapa.appendChild(el('option', {{value: m, textContent: menus[0].buttons[N_LIVRES + m].label.replace('Mapa: ', '')}}));
+        selMapa.onchange = function() {{
+            var a = menus[0].buttons[N_LIVRES + parseInt(selMapa.value, 10)].args;
+            Plotly.restyle(gd, a[0], a[1]);
+            setTimeout(resetarEixosPadrao, 60);
+        }};
+        grupo('Mapa', [selMapa]);
+
+        var camadas = [['OSM', alternarOSM, true]];
+        if (INDICES_CAMPO) camadas.push(['Campo', alternarCampo, true]);
+        if (INDICES_ESTRUTURA) camadas.push(['Estrutura', alternarEstrutura, true]);
+        if (INDICES_GEOQ) camadas.push(['Geoquímica', alternarGeoquimica, true]);
+        grupo('Camadas', camadas.map(function(c) {{
+            var b = el('button', {{textContent: c[0]}});
+            b.onclick = function() {{ c[1](); b.classList.toggle('ativo'); setTimeout(resetarEixosPadrao, 60); }};
+            return b;
+        }}));
+
+        var slider = el('input', {{type: 'range', min: 0, max: 1, value: 0}});
+        var rotuloPos = el('span', {{className: 'rotulo-pos', textContent: ''}});
+        slider.oninput = function() {{
+            var p = parseInt(slider.value, 10);
+            Plotly.relayout(gd, {{'sliders[0].active': p}});
+            Plotly.animate(gd, [anguloAtual + '_' + p], {{mode: 'immediate', frame: {{duration: 0, redraw: true}}, transition: {{duration: 0}}}});
+            atualizarEspessuras(anguloAtual, p);
+        }};
+        grupo('Posição do corte', [slider, rotuloPos, el('span', {{textContent: 'ou clique no mapa', style: 'opacity:.6'}})]);
+
+        function sincronizarSlider() {{
+            if (!slider) return;
+            if (modoEmpilhado) {{ slider.disabled = true; rotuloPos.textContent = 'todos'; return; }}
+            var info = ANGULOS[anguloAtual];
+            slider.disabled = !!info.fixa;
+            slider.max = info.t.length - 1;
+            var p = gd.layout.sliders[0].active || 0;
+            slider.value = p;
+            rotuloPos.textContent = info.fixa ? 'fixo' : ((info.t[p] >= 0 ? '+' : '') + info.t[p].toFixed(0) + ' m');
+        }}
+
+        var btnEscuro = el('button', {{textContent: 'Escuro', className: 'ativo'}});
+        var btnClaro = el('button', {{textContent: 'Claro'}});
+        function tema(nome) {{
+            aplicarTema(nome);
+            var root = document.documentElement.style, claro = nome === 'claro';
+            root.setProperty('--barra-bg', claro ? '#FFFFFF' : '#262B3D');
+            root.setProperty('--barra-txt', claro ? '{MARCA_NAVY}' : '{MARCA_CINZA_CLARO}');
+            root.setProperty('--barra-btn', claro ? '#EDE3FF' : '{MARCA_ROXO_ESCURO}');
+            btnEscuro.classList.toggle('ativo', !claro); btnClaro.classList.toggle('ativo', claro);
+        }}
+        btnEscuro.onclick = function() {{ tema('escuro'); }};
+        btnClaro.onclick = function() {{ tema('claro'); }};
+        grupo('Tema', [btnEscuro, btnClaro]);
+
+        gd.parentNode.insertBefore(barra, gd);
+        function ajustarTamanho() {{
+            var h = Math.max(300, window.innerHeight - barra.offsetHeight);
+            gd.style.height = h + 'px'; gd.style.width = '100%';
+            Plotly.relayout(gd, {{height: h, width: window.innerWidth}}).then(resetarEixosPadrao);
+        }}
+        window.addEventListener('resize', ajustarTamanho);
+        ajustarTamanho();
+        sincronizarSlider();
+
         gd.on('plotly_click', function(data) {{
             var ponto = data.points[0];
             var ehMapa = ponto.curveNumber === 0 || (ponto.curveNumber >= {idx_geo_mapa_inicio} && ponto.curveNumber <= {idx_geo_mapa_fim});
@@ -1617,7 +1726,12 @@ def main():
     }})();
     """
 
-    fig.write_html(str(OUT_HTML), include_plotlyjs="inline", full_html=True, post_script=post_script)
+    for m in fig.layout.updatemenus:
+        m.visible = False
+    fig.layout.sliders[0].visible = False
+    fig.layout.title.text = None
+    fig.write_html(str(OUT_HTML), include_plotlyjs="inline", full_html=True, post_script=post_script,
+                   default_height="100%", default_width="100%", config={"responsive": True, "displaylogo": False})
     favicon_tags = (
         '<link rel="icon" type="image/png" href="assets/favicon.png">'
         '<link rel="shortcut icon" href="assets/favicon.ico">'
