@@ -131,6 +131,8 @@ ANGULOS = [
 ]
 TRACADOS_SHP = BASE.parent / "2_Banco_de_Dados" / "dados_base" / "SECOESTIPO.shp"  # secoes prontas (A-D), linhas fixas
 LIMIAR_PIN_FIXO_M = 400.0  # distancia max da amostra/ponto ao tracado fixo pra virar pin
+Y_MENU = (1.03, 1.10, 1.17)  # barra de controles acima do plot (fracao da altura do plot)
+Y_SLIDER = 1.235
 PASSO_POSICAO = 500.0  # espacamento fixo (m) entre posicoes do slider -- cobre o mapa todo
 N_AMOSTRAS = 300
 RESOLUCAO_MAPA = 150
@@ -514,6 +516,7 @@ def main():
     n_pos_inicial = len(angulos_info[0]["t_vals"])
     inicial = todas_secoes[0][n_pos_inicial // 2]
 
+    eixo_escuro_stack = dict(gridcolor="#54545f", zerolinecolor="#6a6a75", color=MARCA_CINZA_CLARO)
     fig = make_subplots(
         rows=1, cols=2, column_widths=[0.22, 0.78],
         horizontal_spacing=0.06,
@@ -874,6 +877,45 @@ def main():
             ))
     fig.frames = frames
 
+    # --- modo "todos os tracados": 4 secoes empilhadas ao mesmo tempo, cada uma
+    # em eixos proprios (x3/y3 ... x6/y6) dentro da area da secao; tudo escondido
+    # ate o 5o botao ligar (JS mostrarEmpilhado) ---
+    empilhado = []  # (indice_eixo, idx_primeira_trace, n_traces, nome, compKm)
+    if tracados_fixos:
+        dom_x = list(fig.layout.xaxis2.domain)
+        n_fix = len(tracados_fixos)
+        gap = 0.07
+        altura = (1.0 - gap * (n_fix - 1)) / n_fix
+        for k, info in enumerate(tracados_fixos):
+            a = len(ANGULOS) + k
+            eixo = 3 + k
+            topo = 1.0 - k * (altura + gap)
+            comp_km = (info["s_vals"][-1] - info["s_vals"][0]) / 1000
+            fig.update_layout(**{
+                f"xaxis{eixo}": dict(domain=dom_x, anchor=f"y{eixo}", visible=False, range=[0, comp_km], autorange=False,
+                                    title_text="Distância (km)", **eixo_escuro_stack),
+                f"yaxis{eixo}": dict(domain=[topo - altura, topo], anchor=f"x{eixo}", visible=False, range=[-100, 1150],
+                                    autorange=False, title_text="Elev. (m)", **eixo_escuro_stack),
+            })
+            primeiro = len(fig.data)
+            secao = todas_secoes[a][0]
+            for chave in ORDEM_TRACES:
+                if chave == "linha_mapa":
+                    continue
+                x, y = secao[chave]
+                if chave == "terreno":
+                    fig.add_trace(go.Scatter(x=x, y=y, mode="lines", line=dict(color=MARCA_CINZA_CLARO, width=1.5),
+                                             showlegend=False, visible=False, hoverinfo="none",
+                                             xaxis=f"x{eixo}", yaxis=f"y{eixo}"))
+                else:
+                    fig.add_trace(go.Scatter(x=x, y=y, mode="lines", line=dict(width=0), fill="toself",
+                                             fillcolor=CORES_TRACES[chave], name=NOMES_TRACES[chave], showlegend=False,
+                                             visible=False, hoverinfo="name", xaxis=f"x{eixo}", yaxis=f"y{eixo}"))
+            fig.add_annotation(text=f"<b>{info['nome']}</b>", x=0.0, y=1.0, xref=f"x{eixo} domain", yref=f"y{eixo} domain",
+                               showarrow=False, xanchor="left", yanchor="bottom", visible=False,
+                               font=dict(size=12, color=MARCA_CINZA_CLARO))
+            empilhado.append((eixo, primeiro, len(fig.data) - primeiro, len(fig.layout.annotations) - 1))
+
     COR_PAINEL = "#3A3A46"  # fundo cinza dos graficos (secao + barras), diferente do navy da pagina -- mais facil de ler
     eixo_escuro = dict(gridcolor="#54545f", zerolinecolor="#6a6a75", color=MARCA_CINZA_CLARO)
     fig.update_xaxes(showticklabels=False, row=1, col=1, range=MAPA_RANGE_X, autorange=False, scaleanchor="y1", scaleratio=1, constrain="domain")
@@ -890,14 +932,14 @@ def main():
         ),
         paper_bgcolor=MARCA_NAVY, plot_bgcolor=COR_PAINEL,
         font=dict(family=MARCA_FONTE, color=MARCA_CINZA_CLARO),
-        height=900,
+        height=980,
         legend=dict(x=1.01, y=0.94, bgcolor="rgba(45,10,74,0.75)", bordercolor=MARCA_ROXO, borderwidth=1,
                     font=dict(color=MARCA_CINZA_CLARO)),
-        margin=dict(l=50, r=180, t=70, b=280),
+        margin=dict(l=50, r=180, t=300, b=70),
         updatemenus=[
             dict(
                 type="buttons", direction="left", showactive=False,
-                x=0.5, y=-0.38, xanchor="center", yanchor="top",
+                x=0.5, y=Y_MENU[0], xanchor="center", yanchor="bottom",
                 bgcolor=MARCA_ROXO_ESCURO, bordercolor=MARCA_ROXO, borderwidth=1.5,
                 font=dict(color=MARCA_CINZA_CLARO, family=MARCA_FONTE),
                 buttons=[dict(label=nome, method="skip") for nome, _ in ANGULOS] + [
@@ -916,7 +958,7 @@ def main():
             ),
             dict(
                 type="buttons", direction="left", showactive=False,
-                x=0.5, y=-0.46, xanchor="center", yanchor="top",
+                x=0.5, y=Y_MENU[1], xanchor="center", yanchor="bottom",
                 bgcolor=MARCA_ROXO_ESCURO, bordercolor=MARCA_ROXO, borderwidth=1.5,
                 font=dict(color=MARCA_CINZA_CLARO, family=MARCA_FONTE),
                 buttons=[dict(label="OSM: OFF", method="skip")]
@@ -926,15 +968,16 @@ def main():
             ),
         ] + ([dict(
             type="buttons", direction="left", showactive=False,
-            x=0.5, y=-0.54, xanchor="center", yanchor="top",
+            x=0.5, y=Y_MENU[2], xanchor="center", yanchor="bottom",
             bgcolor=MARCA_ROXO_ESCURO, bordercolor=MARCA_ROXO, borderwidth=1.5,
             font=dict(color=MARCA_CINZA_CLARO, family=MARCA_FONTE),
-            buttons=[dict(label=i["nome"], method="skip") for i in tracados_fixos],
+            buttons=[dict(label=i["nome"], method="skip") for i in tracados_fixos]
+            + [dict(label="Todos os traçados", method="skip")],
         )] if tracados_fixos else []),
         sliders=[dict(
             active=n_pos_inicial // 2,
             currentvalue=dict(prefix="Deslocamento perpendicular ao corte: ", font=dict(color=MARCA_CINZA_CLARO)),
-            pad=dict(t=30),
+            x=0.1, len=0.8, y=Y_SLIDER, yanchor="bottom", pad=dict(t=0, b=0),
             bgcolor=MARCA_ROXO_ESCURO, activebgcolor=MARCA_ROXO, bordercolor=MARCA_ROXO,
             font=dict(color=MARCA_CINZA_CLARO, family=MARCA_FONTE),
             steps=[
@@ -1072,6 +1115,7 @@ def main():
         var INDICES_CAMPO = {f"[{idx_pontos_campo},{idx_campo_pin_linha},{idx_campo_pin_marcador}]" if idx_pontos_campo is not None else "null"};
         var INDICES_ESTRUTURA = {f"[{idx_estrutural_risco},{idx_estrutural_simbolo}]" if idx_estrutural_risco is not None else "null"};
         var INDICES_GEOQ = {f"[{idx_geoq},{idx_geoq_pin_linha},{idx_geoq_pin_marcador}]" if idx_geoq is not None else "null"};
+        var EMPILHADO = [{",".join("{eixo:%d,ini:%d,n:%d,ann:%d}" % e for e in empilhado)}];
         var N_LIVRES = {len(ANGULOS)};  // angulos livres (com slider); os demais sao tracados fixos
         var anguloAtual = 0;
         var gd = document.getElementsByClassName('plotly-graph-div')[0];
@@ -1437,7 +1481,35 @@ def main():
             return steps;
         }}
 
+        var modoEmpilhado = false, visSalva = null;
+        function mostrarEmpilhado(ligar) {{
+            if (ligar === modoEmpilhado) return;
+            modoEmpilhado = ligar;
+            var idxPrincipal = [];
+            gd.data.forEach(function(tr, i) {{ if (tr.xaxis === 'x2') idxPrincipal.push(i); }});
+            var patch = {{'xaxis2.visible': !ligar, 'yaxis2.visible': !ligar}};
+            if (ligar) {{
+                visSalva = idxPrincipal.map(function(i) {{ return gd.data[i].visible; }});
+                Plotly.restyle(gd, {{visible: false}}, idxPrincipal);
+                gd.layout.annotations.length;
+                patch['annotations[' + IDX_ANOTACAO_DIR0 + '].visible'] = false;
+                patch['annotations[' + IDX_ANOTACAO_DIR1 + '].visible'] = false;
+            }} else if (visSalva) {{
+                idxPrincipal.forEach(function(i, k) {{ Plotly.restyle(gd, {{visible: visSalva[k]}}, [i]); }});
+                patch['annotations[' + IDX_ANOTACAO_DIR0 + '].visible'] = true;
+                patch['annotations[' + IDX_ANOTACAO_DIR1 + '].visible'] = true;
+            }}
+            EMPILHADO.forEach(function(e) {{
+                var idx = []; for (var k = 0; k < e.n; k++) idx.push(e.ini + k);
+                Plotly.restyle(gd, {{visible: ligar}}, idx);
+                patch['xaxis' + e.eixo + '.visible'] = ligar; patch['yaxis' + e.eixo + '.visible'] = ligar;
+                patch['annotations[' + e.ann + '].visible'] = ligar;
+            }});
+            Plotly.relayout(gd, patch);
+        }}
+
         function irParaAngulo(a) {{
+            mostrarEmpilhado(false);
             anguloAtual = a;
             var posMeio = Math.floor(ANGULOS[a].t.length / 2);
             var patch = {{
@@ -1464,7 +1536,7 @@ def main():
             // aqui como clique no botao de angulo 0 (Horizontal), forcando a
             // secao de volta pro Horizontal sem o usuario pedir -- esse era o
             // bug de "trocar de aba bugava, tinha que ficar voltando".
-            if (Math.abs(ev.menu.y - (-0.38)) <= 0.01) {{
+            if (Math.abs(ev.menu.y - ({Y_MENU[0]})) <= 0.01) {{
                 if (ev.active < N_LIVRES) {{
                     irParaAngulo(ev.active);
                 }} else if (ev.active === N_LIVRES + 3) {{
@@ -1474,9 +1546,9 @@ def main():
                 }}
                 // botoes "Mapa: Satélite/Hipsometria/Geologia" (ANGULOS.length,
                 // +1, +2) usam method='restyle' proprio, nao precisam de JS aqui.
-            }} else if (Math.abs(ev.menu.y - (-0.54)) <= 0.01) {{
-                irParaAngulo(N_LIVRES + ev.active);
-            }} else if (Math.abs(ev.menu.y - (-0.46)) <= 0.01) {{
+            }} else if (Math.abs(ev.menu.y - ({Y_MENU[2]})) <= 0.01) {{
+                if (ev.active >= EMPILHADO.length) {{ mostrarEmpilhado(true); }} else {{ irParaAngulo(N_LIVRES + ev.active); }}
+            }} else if (Math.abs(ev.menu.y - ({Y_MENU[1]})) <= 0.01) {{
                 // OSM (sempre indice 0) / Campo / Estrutura -- cada um agora e
                 // um botao so (liga/desliga), ordem = mesma ordem que entraram
                 // no menu (so existem se INDICES_CAMPO/INDICES_ESTRUTURA != null).
