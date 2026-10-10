@@ -129,6 +129,8 @@ ANGULOS = [
     ("Vertical (S↔N)", 90.0),
     ("Diagonal (SE↔NO)", 135.0),
 ]
+TRACADOS_SHP = BASE.parent / "2_Banco_de_Dados" / "dados_base" / "SECOESTIPO.shp"  # secoes prontas (A-D), linhas fixas
+LIMIAR_PIN_FIXO_M = 400.0  # distancia max da amostra/ponto ao tracado fixo pra virar pin
 PASSO_POSICAO = 500.0  # espacamento fixo (m) entre posicoes do slider -- cobre o mapa todo
 N_AMOSTRAS = 300
 RESOLUCAO_MAPA = 150
@@ -315,8 +317,39 @@ def cobertura_bbox(vx, vy, cx, cy, fator=1.0):
 
 
 def amostrar_linha(cx_linha, cy_linha, dx, dy, s_vals, elevacao, sill_geom, dique_geom):
-    xs = cx_linha + s_vals * dx
-    ys = cy_linha + s_vals * dy
+    return amostrar_xy(cx_linha + s_vals * dx, cy_linha + s_vals * dy, s_vals, elevacao, sill_geom, dique_geom)
+
+
+def rosa_8(dx, dy):
+    nomes = ["L", "NE", "N", "NO", "O", "SO", "S", "SE"]
+    return nomes[int(round(np.degrees(np.arctan2(dy, dx)) / 45.0)) % 8]
+
+
+def montar_tracados_fixos():
+    """Linhas prontas do shapefile (A-D): cada uma vira um "angulo" de 1 posicao
+    so (sem slider de deslocamento), amostrada ao longo da polilinha real
+    (C tem uma inflexao)."""
+    if not TRACADOS_SHP.exists():
+        return []
+    gdf = gpd.read_file(TRACADOS_SHP).sort_values("nome")
+    saida = []
+    for row in gdf.itertuples():
+        geom = row.geometry
+        if geom.geom_type == "MultiLineString":
+            geom = max(geom.geoms, key=lambda g: g.length)
+        geom = LineString([(c[0], c[1]) for c in geom.coords])
+        s_vals = np.linspace(0.0, geom.length, N_AMOSTRAS)
+        pts = [geom.interpolate(s) for s in s_vals]
+        xs = np.array([p.x for p in pts]); ys = np.array([p.y for p in pts])
+        saida.append(dict(
+            nome=f"Traçado {row.nome} ({rosa_8(xs[1] - xs[0], ys[1] - ys[0])}↔{rosa_8(xs[-1] - xs[-2], ys[-1] - ys[-2])})",
+            fixa=True, linha=geom, xs=xs, ys=ys, s_vals=s_vals, t_vals=np.array([0.0]),
+            dx=1.0, dy=0.0, px=0.0, py=1.0,
+        ))
+    return saida
+
+
+def amostrar_xy(xs, ys, s_vals, elevacao, sill_geom, dique_geom):
     dists = (s_vals - s_vals[0]) / 1000
     terreno = np.array([elevacao(x, y) for x, y in zip(xs, ys)])
     dentro_sill = np.array([sill_geom.contains(Point(x, y)) for x, y in zip(xs, ys)])
@@ -368,7 +401,7 @@ def calcular_cruzamentos(xs, ys, gdf, sindex, elevacao):
                 continue
             # posicao ao longo do perfil: projeta o ponto de intersecao no
             # mesmo parametro usado pra "dists" (distancia real desde xs[0]/ys[0])
-            s = math.hypot(pt.x - xs[0], pt.y - ys[0])
+            s = linha.project(pt)
             s_km = s / 1000
             nome = gdf["name"].iloc[i] if "name" in gdf.columns else None
             if not (isinstance(nome, str) and nome.strip()):
@@ -441,6 +474,9 @@ def main():
             t_vals=t_vals,
         ))
 
+    tracados_fixos = montar_tracados_fixos()
+    angulos_info.extend(tracados_fixos)
+
     gdf_rios_cx = gpd.read_file(OSM_RIOS_GEOJSON) if OSM_RIOS_GEOJSON.exists() else None
     gdf_estradas_cx = gpd.read_file(OSM_ESTRADAS_GEOJSON) if OSM_ESTRADAS_GEOJSON.exists() else None
 
@@ -453,12 +489,16 @@ def main():
         pins_rios_angulo = []
         pins_estradas_angulo = []
         for t in info["t_vals"]:
-            cx_linha, cy_linha = CX + t * info["px"], CY + t * info["py"]
-            secao = amostrar_linha(cx_linha, cy_linha, info["dx"], info["dy"], info["s_vals"],
-                                    elevacao, sill_geom, dique_geom)
+            if info.get("fixa"):
+                xs_linha, ys_linha = info["xs"], info["ys"]
+                secao = amostrar_xy(xs_linha, ys_linha, info["s_vals"], elevacao, sill_geom, dique_geom)
+            else:
+                cx_linha, cy_linha = CX + t * info["px"], CY + t * info["py"]
+                secao = amostrar_linha(cx_linha, cy_linha, info["dx"], info["dy"], info["s_vals"],
+                                        elevacao, sill_geom, dique_geom)
+                xs_linha = cx_linha + info["s_vals"] * info["dx"]
+                ys_linha = cy_linha + info["s_vals"] * info["dy"]
             secoes_angulo.append(secao)
-            xs_linha = cx_linha + info["s_vals"] * info["dx"]
-            ys_linha = cy_linha + info["s_vals"] * info["dy"]
             if gdf_rios_cx is not None:
                 pins_rios_angulo.append(calcular_cruzamentos(xs_linha, ys_linha, gdf_rios_cx, gdf_rios_cx.sindex, elevacao))
             else:
@@ -850,10 +890,10 @@ def main():
         ),
         paper_bgcolor=MARCA_NAVY, plot_bgcolor=COR_PAINEL,
         font=dict(family=MARCA_FONTE, color=MARCA_CINZA_CLARO),
-        height=840,
+        height=900,
         legend=dict(x=1.01, y=0.94, bgcolor="rgba(45,10,74,0.75)", bordercolor=MARCA_ROXO, borderwidth=1,
                     font=dict(color=MARCA_CINZA_CLARO)),
-        margin=dict(l=50, r=180, t=70, b=220),
+        margin=dict(l=50, r=180, t=70, b=280),
         updatemenus=[
             dict(
                 type="buttons", direction="left", showactive=False,
@@ -884,7 +924,13 @@ def main():
                 + ([dict(label="Estrutura: OFF", method="skip")] if idx_estrutural_risco is not None else [])
                 + ([dict(label="Geoquímica: OFF", method="skip")] if idx_geoq is not None else []),
             ),
-        ],
+        ] + ([dict(
+            type="buttons", direction="left", showactive=False,
+            x=0.5, y=-0.54, xanchor="center", yanchor="top",
+            bgcolor=MARCA_ROXO_ESCURO, bordercolor=MARCA_ROXO, borderwidth=1.5,
+            font=dict(color=MARCA_CINZA_CLARO, family=MARCA_FONTE),
+            buttons=[dict(label=i["nome"], method="skip") for i in tracados_fixos],
+        )] if tracados_fixos else []),
         sliders=[dict(
             active=n_pos_inicial // 2,
             currentvalue=dict(prefix="Deslocamento perpendicular ao corte: ", font=dict(color=MARCA_CINZA_CLARO)),
@@ -902,12 +948,31 @@ def main():
         )],
     )
 
+    def pins_fixos(info):
+        """x = km ao longo da polilinha; so itens a menos de LIMIAR_PIN_FIXO_M
+        (localidades: 2 km, como nas linhas livres)."""
+        def lista(itens, lim, extra):
+            out = []
+            for it in itens:
+                pt = Point(it[1], it[2])
+                if info["linha"].distance(pt) <= lim:
+                    out.append("{x:%.3f,%s}" % (info["linha"].project(pt) / 1000, extra(it)))
+            return "[" + ",".join(out) + "]"
+        com_cor = lambda it: "nome:%r,cor:%r,hover:%r" % (str(it[0]), it[3], it[4])
+        return ", fixa:1, lug:%s, campo:%s, geoq:%s, estr:%s" % (
+            lista(localidades_dados, 2000.0, lambda it: "nome:%r" % str(it[0])),
+            lista(campo_dados_secao, LIMIAR_PIN_FIXO_M, com_cor),
+            lista(geoq_dados_secao, LIMIAR_PIN_FIXO_M, com_cor),
+            lista([(0, x, y, h) for x, y, h in estrutural_dados_secao], LIMIAR_PIN_FIXO_M, lambda it: "hover:%r" % it[3]),
+        )
+
     angulos_js = ",\n        ".join(
-        "{dx:%.6f, dy:%.6f, px:%.6f, py:%.6f, s0:%.3f, compKm:%.3f, dir0:'%s', dir1:'%s', t:[%s]}" % (
+        "{dx:%.6f, dy:%.6f, px:%.6f, py:%.6f, s0:%.3f, compKm:%.3f, dir0:'%s', dir1:'%s', t:[%s]%s}" % (
             info["dx"], info["dy"], info["px"], info["py"], info["s_vals"][0],
             (info["s_vals"][-1] - info["s_vals"][0]) / 1000,
             *extrair_direcoes(info["nome"]),
             ",".join(f"{t:.2f}" for t in info["t_vals"]),
+            pins_fixos(info) if info.get("fixa") else "",
         )
         for info in angulos_info
     )
@@ -1007,6 +1072,7 @@ def main():
         var INDICES_CAMPO = {f"[{idx_pontos_campo},{idx_campo_pin_linha},{idx_campo_pin_marcador}]" if idx_pontos_campo is not None else "null"};
         var INDICES_ESTRUTURA = {f"[{idx_estrutural_risco},{idx_estrutural_simbolo}]" if idx_estrutural_risco is not None else "null"};
         var INDICES_GEOQ = {f"[{idx_geoq},{idx_geoq_pin_linha},{idx_geoq_pin_marcador}]" if idx_geoq is not None else "null"};
+        var N_LIVRES = {len(ANGULOS)};  // angulos livres (com slider); os demais sao tracados fixos
         var anguloAtual = 0;
         var gd = document.getElementsByClassName('plotly-graph-div')[0];
 
@@ -1035,6 +1101,7 @@ def main():
                 'title.font.color': t.texto,
                 'updatemenus[0].bgcolor': t.botaoBg, 'updatemenus[0].font.color': t.texto,
                 'updatemenus[1].bgcolor': t.botaoBg, 'updatemenus[1].font.color': t.texto,
+                'updatemenus[2].bgcolor': t.botaoBg, 'updatemenus[2].font.color': t.texto,
                 'sliders[0].bgcolor': t.botaoBg, 'sliders[0].font.color': t.texto,
                 'sliders[0].currentvalue.font.color': t.texto,
                 'xaxis2.color': t.texto, 'xaxis2.gridcolor': t.grid, 'xaxis2.zerolinecolor': t.zerogrid,
@@ -1194,7 +1261,7 @@ def main():
             var info = ANGULOS[a];
             var offsetT = info.t[p];
             var lugares = [];
-            LOCALIDADES.forEach(function(loc) {{
+            (info.fixa ? [] : LOCALIDADES).forEach(function(loc) {{
                 var vx = loc.x - CX, vy = loc.y - CY;
                 var s = vx * info.dx + vy * info.dy;
                 var tLoc = vx * info.px + vy * info.py;
@@ -1211,7 +1278,7 @@ def main():
             // limiar bem mais apertado (LIMIAR_PIN_CAMPO_M) -- sao 308 pontos, um
             // limiar igual ao das localidades inundaria a secao de pins.
             var campo = [];
-            PONTOS_CAMPO_SECAO.forEach(function(pt) {{
+            (info.fixa ? [] : PONTOS_CAMPO_SECAO).forEach(function(pt) {{
                 var vx = pt.x - CX, vy = pt.y - CY;
                 var s = vx * info.dx + vy * info.dy;
                 var tLoc = vx * info.px + vy * info.py;
@@ -1225,7 +1292,7 @@ def main():
             // geoquimica: mesma projecao continua dos pontos de campo (limiar
             // igual, LIMIAR_PIN_GEOQ_M) -- so 38 amostras, nao inunda a secao.
             var geoq = [];
-            PONTOS_GEOQ_SECAO.forEach(function(pt) {{
+            (info.fixa ? [] : PONTOS_GEOQ_SECAO).forEach(function(pt) {{
                 var vx = pt.x - CX, vy = pt.y - CY;
                 var s = vx * info.dx + vy * info.dy;
                 var tLoc = vx * info.px + vy * info.py;
@@ -1236,6 +1303,11 @@ def main():
                 }}
             }});
 
+            if (info.fixa) {{
+                info.lug.forEach(function(q) {{ lugares.push({{x: q.x, z: interpolarElevacao(q.x), nome: q.nome, tipo: 'lugares'}}); }});
+                info.campo.forEach(function(q) {{ campo.push({{x: q.x, z: interpolarElevacao(q.x), nome: q.nome, cor: q.cor, hover: q.hover, tipo: 'campo'}}); }});
+                info.geoq.forEach(function(q) {{ geoq.push({{x: q.x, z: interpolarElevacao(q.x), nome: q.nome, cor: q.cor, hover: q.hover, tipo: 'geoq'}}); }});
+            }}
             var todos = lugares.concat(rios, estradas, campo, geoq);
             todos.sort(function(a, b) {{ return a.x - b.x; }});
             atribuirAlturas(todos);
@@ -1278,7 +1350,18 @@ def main():
             var info = ANGULOS[a];
             var xs = [], ys = [], hovers = [];
             var xsSimbolo = [], ysSimbolo = [];
-            ESTRUTURAL_SECAO.forEach(function(pt) {{
+            (info.fixa ? info.estr : []).forEach(function(q) {{
+                var xKm = q.x, yTopo = interpolarElevacao(xKm);
+                if (xs.length > 0) {{ xs.push(NaN); ys.push(NaN); hovers.push(''); }}
+                xs.push(xKm, xKm); ys.push(Y_MIN_SECAO, yTopo);
+                hovers.push(q.hover, q.hover);
+                var yCentro = yTopo - 150;
+                adicionarMeiaSeta(xsSimbolo, ysSimbolo, xKm - GAP_SIMBOLO_KM,
+                    yCentro - OFFSET_SIMBOLO_M / 2, yCentro - OFFSET_SIMBOLO_M / 2 + ALTURA_SIMBOLO_M, -1);
+                adicionarMeiaSeta(xsSimbolo, ysSimbolo, xKm + GAP_SIMBOLO_KM,
+                    yCentro + OFFSET_SIMBOLO_M / 2, yCentro + OFFSET_SIMBOLO_M / 2 - ALTURA_SIMBOLO_M, 1);
+            }});
+            (info.fixa ? [] : ESTRUTURAL_SECAO).forEach(function(pt) {{
                 var vx = pt.x - CX, vy = pt.y - CY;
                 var s = vx * info.dx + vy * info.dy;
                 var tLoc = vx * info.px + vy * info.py;
@@ -1344,7 +1427,7 @@ def main():
             var info = ANGULOS[a];
             var steps = [];
             for (var p = 0; p < info.t.length; p++) {{
-                var rotulo = (info.t[p] >= 0 ? '+' : '') + info.t[p].toFixed(0) + ' m';
+                var rotulo = info.fixa ? 'traçado fixo' : (info.t[p] >= 0 ? '+' : '') + info.t[p].toFixed(0) + ' m';
                 steps.push({{
                     method: 'animate',
                     args: [[a + '_' + p], {{mode: 'immediate', frame: {{duration: 0, redraw: true}}, transition: {{duration: 0}}}}],
@@ -1382,15 +1465,17 @@ def main():
             // secao de volta pro Horizontal sem o usuario pedir -- esse era o
             // bug de "trocar de aba bugava, tinha que ficar voltando".
             if (Math.abs(ev.menu.y - (-0.38)) <= 0.01) {{
-                if (ev.active < ANGULOS.length) {{
+                if (ev.active < N_LIVRES) {{
                     irParaAngulo(ev.active);
-                }} else if (ev.active === ANGULOS.length + 3) {{
+                }} else if (ev.active === N_LIVRES + 3) {{
                     aplicarTema('escuro');
-                }} else if (ev.active === ANGULOS.length + 4) {{
+                }} else if (ev.active === N_LIVRES + 4) {{
                     aplicarTema('claro');
                 }}
                 // botoes "Mapa: Satélite/Hipsometria/Geologia" (ANGULOS.length,
                 // +1, +2) usam method='restyle' proprio, nao precisam de JS aqui.
+            }} else if (Math.abs(ev.menu.y - (-0.54)) <= 0.01) {{
+                irParaAngulo(N_LIVRES + ev.active);
             }} else if (Math.abs(ev.menu.y - (-0.46)) <= 0.01) {{
                 // OSM (sempre indice 0) / Campo / Estrutura -- cada um agora e
                 // um botao so (liga/desliga), ordem = mesma ordem que entraram
