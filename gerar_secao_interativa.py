@@ -880,6 +880,7 @@ def main():
     # --- modo "todos os tracados": 4 secoes empilhadas ao mesmo tempo, cada uma
     # em eixos proprios (x3/y3 ... x6/y6) dentro da area da secao; tudo escondido
     # ate o 5o botao ligar (JS mostrarEmpilhado) ---
+    idx_mapa_trac, n_mapa_trac = 0, 0
     empilhado = []  # (indice_eixo, idx_primeira_trace, n_traces, nome, compKm)
     if tracados_fixos:
         dom_x = list(fig.layout.xaxis2.domain)
@@ -915,6 +916,17 @@ def main():
                                showarrow=False, xanchor="left", yanchor="bottom", visible=False,
                                font=dict(size=12, color=MARCA_CINZA_CLARO))
             empilhado.append((eixo, primeiro, len(fig.data) - primeiro, len(fig.layout.annotations) - 1, topo - altura, topo))
+        # tracados no mapa em planta (rotulo A/A' nas pontas), so no modo "todos"
+        idx_mapa_trac = len(fig.data)
+        for info in tracados_fixos:
+            letra = info["nome"].split()[1]
+            rot = [None] * len(info["xs"]); rot[0] = letra; rot[-1] = letra + "'"
+            fig.add_trace(go.Scatter(
+                x=info["xs"], y=info["ys"], mode="lines+text", text=rot, textposition="top center",
+                textfont=dict(size=15, color="#FFFFFF", family=MARCA_FONTE),
+                line=dict(color=MARCA_ROXO, width=2.5, dash="dash"), showlegend=False, visible=False, hoverinfo="skip",
+            ), row=1, col=1)
+        n_mapa_trac = len(tracados_fixos)
 
     COR_PAINEL = "#3A3A46"  # fundo cinza dos graficos (secao + barras), diferente do navy da pagina -- mais facil de ler
     eixo_escuro = dict(gridcolor="#54545f", zerolinecolor="#6a6a75", color=MARCA_CINZA_CLARO)
@@ -1115,6 +1127,7 @@ def main():
         var INDICES_ESTRUTURA = {f"[{idx_estrutural_risco},{idx_estrutural_simbolo}]" if idx_estrutural_risco is not None else "null"};
         var INDICES_GEOQ = {f"[{idx_geoq},{idx_geoq_pin_linha},{idx_geoq_pin_marcador}]" if idx_geoq is not None else "null"};
         var EMPILHADO = [{",".join("{eixo:%d,ini:%d,n:%d,ann:%d,d0:%.4f,d1:%.4f}" % e for e in empilhado)}];
+        var MAPA_TRACADOS = [{idx_mapa_trac}, {n_mapa_trac}];
         var N_LIVRES = {len(ANGULOS)};  // angulos livres (com slider); os demais sao tracados fixos
         var anguloAtual = 0;
         var gd = document.getElementsByClassName('plotly-graph-div')[0];
@@ -1506,6 +1519,10 @@ def main():
                 patch['xaxis' + e.eixo + '.visible'] = ligar; patch['yaxis' + e.eixo + '.visible'] = ligar;
                 patch['annotations[' + e.ann + '].visible'] = ligar;
             }});
+            if (MAPA_TRACADOS[1]) {{
+                var im = []; for (var k = 0; k < MAPA_TRACADOS[1]; k++) im.push(MAPA_TRACADOS[0] + k);
+                Plotly.restyle(gd, {{visible: ligar}}, im);
+            }}
             Plotly.relayout(gd, patch);
         }}
 
