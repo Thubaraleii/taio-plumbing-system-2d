@@ -928,7 +928,7 @@ def main():
         title=dict(
             text="<b>Modelo 2D Taió Plumbing System</b> — Seção transversal interativa",
             font=dict(family=MARCA_FONTE, size=24, color=MARCA_CINZA_CLARO),
-            x=0.03, xanchor="left",
+            x=0.03, xanchor="left", y=0.985, yanchor="top", yref="container",
         ),
         paper_bgcolor=MARCA_NAVY, plot_bgcolor=COR_PAINEL,
         font=dict(family=MARCA_FONTE, color=MARCA_CINZA_CLARO),
