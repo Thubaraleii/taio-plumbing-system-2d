@@ -342,7 +342,7 @@ def montar_tracados_fixos():
         pts = [geom.interpolate(s) for s in s_vals]
         xs = np.array([p.x for p in pts]); ys = np.array([p.y for p in pts])
         saida.append(dict(
-            nome=f"Traçado {row.nome} ({rosa_8(xs[1] - xs[0], ys[1] - ys[0])}↔{rosa_8(xs[-1] - xs[-2], ys[-1] - ys[-2])})",
+            nome=f"Traçado {row.nome} ({rosa_8(xs[0] - xs[1], ys[0] - ys[1])}↔{rosa_8(xs[-1] - xs[0], ys[-1] - ys[0])})",
             fixa=True, linha=geom, xs=xs, ys=ys, s_vals=s_vals, t_vals=np.array([0.0]),
             dx=1.0, dy=0.0, px=0.0, py=1.0,
         ))
