@@ -894,7 +894,7 @@ def main():
             fig.update_layout(**{
                 f"xaxis{eixo}": dict(domain=dom_x, anchor=f"y{eixo}", visible=False, range=[0, comp_km], autorange=False,
                                     title_text="Distância (km)", **eixo_escuro_stack),
-                f"yaxis{eixo}": dict(domain=[0.0, 0.0001], anchor=f"x{eixo}", visible=False, range=[-100, 1150],
+                f"yaxis{eixo}": dict(domain=[0.0, 0.003], anchor=f"x{eixo}", visible=False, range=[-100, 1150],
                                     autorange=False, title_text="Elev. (m)", **eixo_escuro_stack),
             })
             primeiro = len(fig.data)
@@ -1502,7 +1502,7 @@ def main():
             EMPILHADO.forEach(function(e) {{
                 var idx = []; for (var k = 0; k < e.n; k++) idx.push(e.ini + k);
                 Plotly.restyle(gd, {{visible: ligar}}, idx);
-                patch['yaxis' + e.eixo + '.domain'] = ligar ? [e.d0, e.d1] : [0, 0.0001];
+                patch['yaxis' + e.eixo + '.domain'] = ligar ? [e.d0, e.d1] : [0, 0.003];
                 patch['xaxis' + e.eixo + '.visible'] = ligar; patch['yaxis' + e.eixo + '.visible'] = ligar;
                 patch['annotations[' + e.ann + '].visible'] = ligar;
             }});
