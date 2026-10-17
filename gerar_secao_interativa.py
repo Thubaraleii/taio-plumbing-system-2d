@@ -1231,24 +1231,30 @@ def main():
         // de par ON/OFF -- indiceBotao = posicao dentro do menu 2 (0=OSM,
         // depois Campo/Estrutura so se existirem), usado pra achar o proprio
         // botao e atualizar o texto dele depois do clique.
+        // no modo empilhado os traces da secao normal (eixo x2) ficam sempre escondidos; so o mapa (x1) liga/desliga
+        function setVisCamada(indices, v) {{
+            var alvo = modoEmpilhado ? indices.filter(function(i) {{ return gd.data[i].xaxis !== 'x2'; }}) : indices;
+            if (alvo.length) Plotly.restyle(gd, {{visible: v}}, alvo);
+        }}
+
         var osmAtivo = false;
         function alternarOSM() {{
             osmAtivo = !osmAtivo;
-            Plotly.restyle(gd, {{visible: osmAtivo}}, INDICES_OSM);
+            setVisCamada(INDICES_OSM, osmAtivo);
         }}
 
         var campoAtivo = false;
         function alternarCampo() {{
             if (!INDICES_CAMPO) return;
             campoAtivo = !campoAtivo;
-            Plotly.restyle(gd, {{visible: campoAtivo}}, INDICES_CAMPO);
+            setVisCamada(INDICES_CAMPO, campoAtivo);
         }}
 
         var estruturaAtiva = false;
         function alternarEstrutura() {{
             if (!INDICES_ESTRUTURA) return;
             estruturaAtiva = !estruturaAtiva;
-            Plotly.restyle(gd, {{visible: estruturaAtiva}}, INDICES_ESTRUTURA);
+            setVisCamada(INDICES_ESTRUTURA, estruturaAtiva);
             // recalcula pra posicao/angulo ATUAL do corte -- sem isso o simbolo
             // so refletia a ultima vez que o slider/angulo mudou (podia ficar
             // desatualizado se o usuario ligar Estrutura depois de mexer nisso
@@ -1263,7 +1269,7 @@ def main():
         function alternarGeoquimica() {{
             if (!INDICES_GEOQ) return;
             geoquimicaAtiva = !geoquimicaAtiva;
-            Plotly.restyle(gd, {{visible: geoquimicaAtiva}}, INDICES_GEOQ);
+            setVisCamada(INDICES_GEOQ, geoquimicaAtiva);
         }}
 
         // elevacao real (interpolada) do terreno numa distancia x (km) do
