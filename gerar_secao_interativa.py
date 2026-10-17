@@ -1590,7 +1590,7 @@ def main():
                     if (INDICES_CAMPO && INDICES_CAMPO.indexOf(i) >= 0) return campoAtivo;
                     if (INDICES_ESTRUTURA && INDICES_ESTRUTURA.indexOf(i) >= 0) return estruturaAtiva;
                     if (INDICES_GEOQ && INDICES_GEOQ.indexOf(i) >= 0) return geoquimicaAtiva;
-                    return visSalva[k];
+                    return visSalva[k] !== false;  // visible indefinido = visivel
                 }});
                 var ligados = idx.filter(function(i, k) {{ return estados[k]; }});
                 var desligados = idx.filter(function(i, k) {{ return !estados[k]; }});
