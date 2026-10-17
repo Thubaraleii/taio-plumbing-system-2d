@@ -1148,7 +1148,7 @@ def main():
         var LIMIAR_PIN_M = 2000;  // so vira pin se a linha de corte passar a menos de 2km da localidade
         var LIMIAR_PIN_CAMPO_M = 400;  // pontos de campo sao 308 -- limiar bem mais apertado que localidades
         var LIMIAR_PIN_GEOQ_M = 400;  // mesmo limiar apertado dos pontos de campo (38 amostras)
-        var ALTURA_PIN_M = 60;  // marcador fica esse tanto (metros) acima da topografia real
+        var ALTURA_PIN_M = 90;  // marcador fica esse tanto (metros) acima da topografia real
         var TETO_PIN_M = 1100;  // ceiling absoluto -- evita que o pin (principalmente localidade,
                                  // que pode escalonar bem alto com o boost) suba pra fora do eixo Y
                                  // (range vai ate 1150) e "suma" da visualizacao
@@ -1167,9 +1167,9 @@ def main():
         var IDX_ESTRUTURAL_SIMBOLO = {idx_estrutural_simbolo};
         var LIMIAR_ESTRUTURAL_M = 400;  // mesmo limiar apertado dos pontos de campo
         var Y_MIN_SECAO = -100;  // fundo fixo do risco -- bate com o novo limite inferior do eixo (topo segue a topografia real)
-        var GAP_SIMBOLO_KM = 0.04;  // buffer/gap entre cada meia-seta e o risco vertical
-        var ALTURA_SIMBOLO_M = 100;  // variacao vertical (altura) de cada meia-seta, em metros
-        var OFFSET_SIMBOLO_M = 80;  // deslocamento vertical entre as duas metades (efeito "fatiado")
+        var GAP_SIMBOLO_KM = 0.03;  // buffer/gap entre cada meia-seta e o risco vertical
+        var ALTURA_SIMBOLO_M = 55;  // variacao vertical (altura) de cada meia-seta, em metros
+        var OFFSET_SIMBOLO_M = 40;  // deslocamento vertical entre as duas metades (efeito "fatiado")
         var IDX_ANOTACAO_DIR0 = {idx_anotacao_dir0};
         var IDX_ANOTACAO_DIR1 = {idx_anotacao_dir1};
         var IDX_ANOTACOES_SUBTITULO = [0, 1];
@@ -1291,8 +1291,8 @@ def main():
             return ty[n - 1];
         }}
 
-        var LIMIAR_SOBREPOSICAO_KM = 0.5;  // pins mais pertos que isso escalonam de altura
-        var N_NIVEIS_ALTURA = 4;  // 1x,2x,3x,4x ALTURA_PIN_M, depois volta pro 1x
+        var LIMIAR_SOBREPOSICAO_KM = 0.9;  // pins mais pertos que isso escalonam de altura
+        var N_NIVEIS_ALTURA = 6;  // 1x,2x,3x,4x ALTURA_PIN_M, depois volta pro 1x
 
         // escalona a altura (multiplo de ALTURA_PIN_M) de cada ponto -- pontos
         // ja ordenados por x: sobe 1 nivel toda vez que o proximo esta perto
@@ -1331,7 +1331,7 @@ def main():
                 var cor = p.cor || corTipo;
                 lx.push(p.x, p.x); ly.push(p.z, topo);
                 mx.push(p.x); my.push(p.z); texts.push(''); sizes.push(5); symbols.push('circle'); cores.push(cor); hovers.push('');
-                mx.push(p.x); my.push(topo); texts.push(p.nome); sizes.push(tamanhoTopo); symbols.push(simboloTipo); cores.push(cor);
+                mx.push(p.x); my.push(topo); texts.push(p.tipo === 'campo' ? '' : p.nome);  // campo: nome so no hover (evita rotulo sobreposto) sizes.push(tamanhoTopo); symbols.push(simboloTipo); cores.push(cor);
                 hovers.push(p.hover || p.nome);
             }});
             lotePins.li.push(idxLinha); lotePins.lx.push(lx); lotePins.ly.push(ly);
@@ -1439,7 +1439,7 @@ def main():
         // risco) de (x,y0) a (x,y1), mais UMA farpa curta no head (lado
         // externo, longe do risco) formando a ponta -- sem farpa do lado de
         // dentro, pra nao ficar com a seta "cheia"/dobrada em cima da linha.
-        var LARGURA_FARPA_KM = 0.05, ALTURA_FARPA_M = 50;
+        var LARGURA_FARPA_KM = 0.03, ALTURA_FARPA_M = 30;
         function adicionarMeiaSeta(xs, ys, x, y0, y1, ladoFarpa) {{
             if (xs.length > 0) {{ xs.push(NaN); ys.push(NaN); }}
             xs.push(x, x); ys.push(y0, y1);
@@ -1452,16 +1452,23 @@ def main():
             var info = ANGULOS[a];
             var xs = [], ys = [], hovers = [];
             var xsSimbolo = [], ysSimbolo = [];
+            var simbolosX = [];  // so 1 setinha por trecho de 300 m (risco continua em todos)
+            function podeSimbolo(x) {{
+                for (var q = 0; q < simbolosX.length; q++) if (Math.abs(x - simbolosX[q]) < 0.3) return false;
+                simbolosX.push(x); return true;
+            }}
             (info.fixa ? info.estr : []).forEach(function(q) {{
                 var xKm = q.x, yTopo = interpolarElevacao(xKm);
                 if (xs.length > 0) {{ xs.push(NaN); ys.push(NaN); hovers.push(''); }}
                 xs.push(xKm, xKm); ys.push(Y_MIN_SECAO, yTopo);
                 hovers.push(q.hover, q.hover);
                 var yCentro = yTopo - 150;
-                adicionarMeiaSeta(xsSimbolo, ysSimbolo, xKm - GAP_SIMBOLO_KM,
-                    yCentro - OFFSET_SIMBOLO_M / 2, yCentro - OFFSET_SIMBOLO_M / 2 + ALTURA_SIMBOLO_M, -1);
-                adicionarMeiaSeta(xsSimbolo, ysSimbolo, xKm + GAP_SIMBOLO_KM,
-                    yCentro + OFFSET_SIMBOLO_M / 2, yCentro + OFFSET_SIMBOLO_M / 2 - ALTURA_SIMBOLO_M, 1);
+                if (podeSimbolo(xKm)) {{
+                    adicionarMeiaSeta(xsSimbolo, ysSimbolo, xKm - GAP_SIMBOLO_KM,
+                        yCentro - OFFSET_SIMBOLO_M / 2, yCentro - OFFSET_SIMBOLO_M / 2 + ALTURA_SIMBOLO_M, -1);
+                    adicionarMeiaSeta(xsSimbolo, ysSimbolo, xKm + GAP_SIMBOLO_KM,
+                        yCentro + OFFSET_SIMBOLO_M / 2, yCentro + OFFSET_SIMBOLO_M / 2 - ALTURA_SIMBOLO_M, 1);
+                }}
             }});
             (info.fixa ? [] : ESTRUTURAL_SECAO).forEach(function(pt) {{
                 var vx = pt.x - CX, vy = pt.y - CY;
@@ -1485,10 +1492,12 @@ def main():
                     // cabo vertical de cada lado (90 graus, igual ao risco) --
                     // esquerda sobe, direita desce -- com a farpa apontando
                     // pra fora (longe da linha).
-                    adicionarMeiaSeta(xsSimbolo, ysSimbolo, xKm - GAP_SIMBOLO_KM,
-                        yCentro - OFFSET_SIMBOLO_M / 2, yCentro - OFFSET_SIMBOLO_M / 2 + ALTURA_SIMBOLO_M, -1);
-                    adicionarMeiaSeta(xsSimbolo, ysSimbolo, xKm + GAP_SIMBOLO_KM,
-                        yCentro + OFFSET_SIMBOLO_M / 2, yCentro + OFFSET_SIMBOLO_M / 2 - ALTURA_SIMBOLO_M, 1);
+                    if (podeSimbolo(xKm)) {{
+                        adicionarMeiaSeta(xsSimbolo, ysSimbolo, xKm - GAP_SIMBOLO_KM,
+                            yCentro - OFFSET_SIMBOLO_M / 2, yCentro - OFFSET_SIMBOLO_M / 2 + ALTURA_SIMBOLO_M, -1);
+                        adicionarMeiaSeta(xsSimbolo, ysSimbolo, xKm + GAP_SIMBOLO_KM,
+                            yCentro + OFFSET_SIMBOLO_M / 2, yCentro + OFFSET_SIMBOLO_M / 2 - ALTURA_SIMBOLO_M, 1);
+                    }}
                 }}
             }});
             if (IDX_ESTRUTURAL_SIMBOLO !== null) {{
