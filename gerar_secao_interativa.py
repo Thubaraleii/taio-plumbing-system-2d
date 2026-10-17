@@ -15,7 +15,6 @@ Gera:
 """
 import base64
 import json
-import math
 from pathlib import Path
 
 import geopandas as gpd
@@ -57,7 +56,6 @@ OUT_HTML = Path(__file__).parent / "secao_interativa.html"
 # ../visualizacao_web/gerar_visualizador_3d.py, manter as duas em sincronia.
 MARCA_ROXO_ESCURO = "#2D0A4A"
 MARCA_ROXO = "#7B2FFF"
-MARCA_AZUL = "#2E6F95"
 MARCA_NAVY = "#1B1F2E"
 MARCA_CINZA_CLARO = "#F2F2F2"
 MARCA_FONTE = "Montserrat, Arial, sans-serif"
@@ -180,8 +178,6 @@ CORES_CLASSIFICACAO_ESTRUTURAL = {
     "fabrica_interna_intrusao": "#7B2FFF",
 }
 COR_CLASSIFICACAO_PADRAO = "#999999"
-ESPESSURA_SILL = 400.0  # OBSOLETO (10/08/2026) -- o sill deixou de usar espessura fixa, ver
-# ESPESSURA_MINIMA_SILL/amostrar_linha (base = topo da Serra Alta, nao mais um offset).
 ESPESSURA_MINIMA_SILL = 27.0  # espessura minima do sill (m) -- mediana real medida em campo
 # (mesmo valor/mesmo motivo de ../visualizacao_web/gerar_visualizador_3d.py).
 QUATERNARIO_LIMIAR = 450.0
@@ -1211,9 +1207,6 @@ def main():
                 'font.color': t.texto,
                 'legend.bgcolor': t.legendBg, 'legend.font.color': t.texto,
                 'title.font.color': t.texto,
-                'updatemenus[0].bgcolor': t.botaoBg, 'updatemenus[0].font.color': t.texto,
-                'updatemenus[1].bgcolor': t.botaoBg, 'updatemenus[1].font.color': t.texto,
-                'updatemenus[2].bgcolor': t.botaoBg, 'updatemenus[2].font.color': t.texto,
                 'sliders[0].bgcolor': t.botaoBg, 'sliders[0].font.color': t.texto,
                 'sliders[0].currentvalue.font.color': t.texto,
                 'xaxis2.color': t.texto, 'xaxis2.gridcolor': t.grid, 'xaxis2.zerolinecolor': t.zerogrid,
@@ -1238,17 +1231,10 @@ def main():
         // de par ON/OFF -- indiceBotao = posicao dentro do menu 2 (0=OSM,
         // depois Campo/Estrutura so se existirem), usado pra achar o proprio
         // botao e atualizar o texto dele depois do clique.
-        function atualizarLabelBotaoMenu2(indiceBotao, texto) {{
-            var patch = {{}};
-            patch['updatemenus[1].buttons[' + indiceBotao + '].label'] = texto;
-            Plotly.relayout(gd, patch);
-        }}
-
         var osmAtivo = false;
         function alternarOSM() {{
             osmAtivo = !osmAtivo;
             Plotly.restyle(gd, {{visible: osmAtivo}}, INDICES_OSM);
-            atualizarLabelBotaoMenu2(0, osmAtivo ? 'OSM: ON' : 'OSM: OFF');
         }}
 
         var campoAtivo = false;
@@ -1256,7 +1242,6 @@ def main():
             if (!INDICES_CAMPO) return;
             campoAtivo = !campoAtivo;
             Plotly.restyle(gd, {{visible: campoAtivo}}, INDICES_CAMPO);
-            atualizarLabelBotaoMenu2(1, campoAtivo ? 'Campo: ON' : 'Campo: OFF');
         }}
 
         var estruturaAtiva = false;
@@ -1264,7 +1249,6 @@ def main():
             if (!INDICES_ESTRUTURA) return;
             estruturaAtiva = !estruturaAtiva;
             Plotly.restyle(gd, {{visible: estruturaAtiva}}, INDICES_ESTRUTURA);
-            atualizarLabelBotaoMenu2(INDICES_CAMPO ? 2 : 1, estruturaAtiva ? 'Estrutura: ON' : 'Estrutura: OFF');
             // recalcula pra posicao/angulo ATUAL do corte -- sem isso o simbolo
             // so refletia a ultima vez que o slider/angulo mudou (podia ficar
             // desatualizado se o usuario ligar Estrutura depois de mexer nisso
@@ -1280,8 +1264,6 @@ def main():
             if (!INDICES_GEOQ) return;
             geoquimicaAtiva = !geoquimicaAtiva;
             Plotly.restyle(gd, {{visible: geoquimicaAtiva}}, INDICES_GEOQ);
-            var indiceBotao = (INDICES_CAMPO ? 1 : 0) + (INDICES_ESTRUTURA ? 1 : 0) + 1;
-            atualizarLabelBotaoMenu2(indiceBotao, geoquimicaAtiva ? 'Geoquímica: ON' : 'Geoquímica: OFF');
         }}
 
         // elevacao real (interpolada) do terreno numa distancia x (km) do
@@ -1630,56 +1612,6 @@ def main():
             }});
             atualizarEspessuras(a, posMeio);
         }}
-
-        gd.on('plotly_buttonclicked', function(ev) {{
-            if (typeof ev.active !== 'number') return;
-            // ev.active e sempre LOCAL ao menu clicado, nao global -- com 2
-            // linhas de updatemenus (angulo/mapa/tema na primeira, OSM/campo/
-            // estrutura na segunda), sem checar QUAL menu disparou o evento,
-            // um clique em "OSM" (ev.active=0 na 2a linha) seria interpretado
-            // aqui como clique no botao de angulo 0 (Horizontal), forcando a
-            // secao de volta pro Horizontal sem o usuario pedir -- esse era o
-            // bug de "trocar de aba bugava, tinha que ficar voltando".
-            if (Math.abs(ev.menu.y - ({Y_MENU[0]})) <= 0.01) {{
-                if (ev.active < N_LIVRES) {{
-                    irParaAngulo(ev.active);
-                }} else if (ev.active === N_LIVRES + 3) {{
-                    aplicarTema('escuro');
-                }} else if (ev.active === N_LIVRES + 4) {{
-                    aplicarTema('claro');
-                }}
-                // botoes "Mapa: Satélite/Hipsometria/Geologia" (ANGULOS.length,
-                // +1, +2) usam method='restyle' proprio, nao precisam de JS aqui.
-            }} else if (Math.abs(ev.menu.y - ({Y_MENU[2]})) <= 0.01) {{
-                if (ev.active >= EMPILHADO.length) {{ mostrarEmpilhado(true); }} else {{ irParaAngulo(N_LIVRES + ev.active); }}
-            }} else if (Math.abs(ev.menu.y - ({Y_MENU[1]})) <= 0.01) {{
-                // OSM (sempre indice 0) / Campo / Estrutura -- cada um agora e
-                // um botao so (liga/desliga), ordem = mesma ordem que entraram
-                // no menu (so existem se INDICES_CAMPO/INDICES_ESTRUTURA != null).
-                var indice = 0;
-                if (ev.active === indice) {{ alternarOSM(); return setTimeout(resetarEixosPadrao, 60); }}
-                if (INDICES_CAMPO) {{
-                    indice++;
-                    if (ev.active === indice) {{ alternarCampo(); return setTimeout(resetarEixosPadrao, 60); }}
-                }}
-                if (INDICES_ESTRUTURA) {{
-                    indice++;
-                    if (ev.active === indice) {{ alternarEstrutura(); return setTimeout(resetarEixosPadrao, 60); }}
-                }}
-                if (INDICES_GEOQ) {{
-                    indice++;
-                    if (ev.active === indice) {{ alternarGeoquimica(); return setTimeout(resetarEixosPadrao, 60); }}
-                }}
-            }}
-            // QUALQUER clique de botao (linha 1 ou 2) pode disparar um redraw
-            // interno do Plotly que desalinha os eixos do recorte padrao (o
-            // mesmo problema do duplo-clique, ver resetarEixosPadrao) --
-            // reforca depois que o restyle/relayout nativo do botao ja
-            // terminou (delay real, nao so setTimeout(0) -- ver comentario
-            // no handler de plotly_doubleclick), sem interferir em zoom/pan
-            // manual do usuario via mouse (que nao passa por aqui).
-            setTimeout(resetarEixosPadrao, 60);
-        }});
 
         // duplo-clique no grafico (reset nativo do Plotly) ignora o range/
         // autorange configurado e recalcula pelo extremo REAL dos dados --
