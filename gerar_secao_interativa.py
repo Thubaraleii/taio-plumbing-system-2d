@@ -455,6 +455,73 @@ LEGENDRANK_TRACES.update({chave: 7 + k for k, chave in enumerate(_CHAVES_CAMADAS
 LEGENDRANK_OSM = {"lugares": 1, "rios": 2, "estradas": 3}
 
 
+def malha_cortina(xs, ys, topo, base):
+    """Faixa vertical (cortina) entre `topo` e `base` ao longo da polilinha (xs,ys);
+    so liga amostras consecutivas validas (nao fecha buracos onde a unidade some)."""
+    n = len(xs)
+    valido = np.isfinite(topo) & np.isfinite(base) & (topo - base > 0.5)
+    z_t = np.where(valido, topo, 0.0); z_b = np.where(valido, base, 0.0)
+    i_, j_, k_ = [], [], []
+    for a in range(n - 1):
+        if valido[a] and valido[a + 1]:
+            i_ += [a, a + 1]; j_ += [a + 1, n + a + 1]; k_ += [n + a, n + a]
+    if not i_:
+        return None
+    return dict(x=np.concatenate([xs, xs]), y=np.concatenate([ys, ys]), z=np.concatenate([z_t, z_b]), i=i_, j=j_, k=k_)
+
+
+def montar_fig_3d(tracados, elevacao, sill_geom, dique_geom, mx, my, mz):
+    """Vista 3D: as 4 secoes fixas (A-D) em pe, como cortes de um diagrama de cortina,
+    sobre o relevo (translucido). Mesmas unidades/cores da secao 2D."""
+    fig = go.Figure()
+    fig.add_trace(go.Surface(x=mx[::3, ::3], y=my[::3, ::3], z=mz[::3, ::3], colorscale=COLORSCALE_HIPSOMETRICO,
+                             opacity=0.28, showscale=False, hoverinfo="skip", name="Relevo", showlegend=False))
+    vistos = set()
+
+    def add(nome, malha, cor):
+        if malha is None:
+            return
+        fig.add_trace(go.Mesh3d(**malha, color=cor, flatshading=True, opacity=1.0, name=nome, legendgroup=nome,
+                                showlegend=nome not in vistos, hoverinfo="name",
+                                lighting=dict(ambient=0.75, diffuse=0.5, specular=0.05)))
+        vistos.add(nome)
+
+    for info in tracados:
+        xs, ys = info["xs"], info["ys"]
+        terreno = np.array([elevacao(x, y) for x, y in zip(xs, ys)])
+        tilt = Z_REF_TILT + TREND_A * (xs - TREND_X0) + TREND_B * (ys - TREND_Y0)
+        contatos = [terreno if m == 0 else np.minimum(tilt - PROFUNDIDADE_CAMADAS[m], terreno)
+                    for m in range(len(PROFUNDIDADE_CAMADAS))]
+        for k, nome in enumerate(NOMES_CAMADAS):
+            add(nome, malha_cortina(xs, ys, contatos[k], contatos[k + 1]), CORES_CAMADAS[k])
+        quat = np.where(terreno <= QUATERNARIO_LIMIAR, terreno, np.nan)
+        add("Depósito quaternário", malha_cortina(xs, ys, quat, quat - QUATERNARIO_ESPESSURA), COR_QUATERNARIO)
+        dentro_sill = np.array([sill_geom.contains(Point(x, y)) for x, y in zip(xs, ys)])
+        dentro_dique = np.array([dique_geom.contains(Point(x, y)) for x, y in zip(xs, ys)])
+        base_sill = np.minimum(contatos[1], terreno - ESPESSURA_MINIMA_SILL)
+        add("Soleira", malha_cortina(xs, ys, np.where(dentro_sill, terreno, np.nan), base_sill), COR_SILL)
+        add("Dique", malha_cortina(xs, ys, np.where(dentro_dique, terreno, np.nan), np.full_like(terreno, -300.0)), COR_DIQUE)
+        letra = info["nome"].split()[1]
+        fig.add_trace(go.Scatter3d(
+            x=xs, y=ys, z=terreno + 6, mode="lines+text", line=dict(color="#FFFFFF", width=4),
+            text=[letra] + [None] * (len(xs) - 2) + [letra + "'"], textposition="top center",
+            textfont=dict(size=16, color="#FFFFFF"), hoverinfo="skip", showlegend=False))
+    dx_, dy_ = X_MAX - X_MIN, Y_MAX - Y_MIN
+    fig.update_layout(
+        paper_bgcolor=MARCA_NAVY, font=dict(family=MARCA_FONTE, color=MARCA_CINZA_CLARO),
+        margin=dict(l=0, r=0, t=10, b=0),
+        legend=dict(bgcolor="rgba(45,10,74,0.75)", bordercolor=MARCA_ROXO, borderwidth=1),
+        scene=dict(
+            xaxis=dict(title="X (UTM)", range=[X_MIN, X_MAX], backgroundcolor="#3A3A46", gridcolor="#54545f", color=MARCA_CINZA_CLARO),
+            yaxis=dict(title="Y (UTM)", range=[Y_MIN, Y_MAX], backgroundcolor="#3A3A46", gridcolor="#54545f", color=MARCA_CINZA_CLARO),
+            zaxis=dict(title="Z (m)", range=[-350, 1150], backgroundcolor="#3A3A46", gridcolor="#54545f", color=MARCA_CINZA_CLARO),
+            aspectmode="manual", aspectratio=dict(x=1, y=dy_ / dx_, z=min(0.45, 5.0 * 1500 / dx_)),
+            camera=dict(eye=dict(x=-1.3, y=-1.6, z=0.9)),
+        ),
+    )
+    return fig
+
+
 def main():
     elevacao, xyz = montar_elevador()
     gdf_lito = gpd.read_file(LITOLOGIA_ATUALIZADA)
@@ -1126,6 +1193,7 @@ def main():
     }})();
     """ if logo_b64 else ""
 
+    fig3d_json = montar_fig_3d(tracados_fixos, elevacao, sill_geom, dique_geom, mx, my, mz).to_json() if tracados_fixos else "null"
     post_script = f"""
     {marca_html}
     (function() {{
@@ -1179,6 +1247,7 @@ def main():
         var INDICES_GEOQ = {f"[{idx_geoq},{idx_geoq_pin_linha},{idx_geoq_pin_marcador}]" if idx_geoq is not None else "null"};
         var EMPILHADO = [{",".join("{eixo:%d,ini:%d,n:%d,ann:%d,d0:%.4f,d1:%.4f}" % e for e in empilhado)}];
         var EMP_CAT = {json.dumps(emp_cat)};
+        var FIG3D = {fig3d_json};
         var MAPA_TRACADOS = [{idx_mapa_trac}, {n_mapa_trac}];
         var N_LIVRES = {len(ANGULOS)};  // angulos livres (com slider); os demais sao tracados fixos
         var anguloAtual = 0;
@@ -1752,10 +1821,33 @@ def main():
         btnClaro.onclick = function() {{ tema('claro'); }};
         grupo('Tema', [btnEscuro, btnClaro]);
 
+        var vista3d = el('div', {{id: 'vista-3d'}});
+        vista3d.style.cssText = 'display:none;width:100%';
+        var vista3dCriada = false, em3d = false;
+        if (FIG3D) {{
+            var btn3d = el('button', {{textContent: 'Vista 3D'}});
+            btn3d.onclick = function() {{
+                em3d = !em3d;
+                gd.style.display = em3d ? 'none' : 'block';
+                vista3d.style.display = em3d ? 'block' : 'none';
+                btn3d.textContent = em3d ? 'Voltar à seção' : 'Vista 3D';
+                btn3d.classList.toggle('ativo', em3d);
+                if (em3d) {{
+                    vista3d.style.height = gd.style.height;
+                    if (!vista3dCriada) {{ Plotly.newPlot(vista3d, FIG3D.data, FIG3D.layout, {{responsive: true, displaylogo: false}}); vista3dCriada = true; }}
+                    else {{ Plotly.Plots.resize(vista3d); }}
+                }} else {{
+                    Plotly.Plots.resize(gd); setTimeout(resetarEixosPadrao, 60);
+                }}
+            }};
+            grupo('Vista', [btn3d]);
+        }}
         gd.parentNode.insertBefore(barra, gd);
+        gd.parentNode.insertBefore(vista3d, gd.nextSibling);
         function ajustarTamanho() {{
             var h = Math.max(300, window.innerHeight - barra.offsetHeight);
-            gd.style.height = h + 'px'; gd.style.width = '100%';
+            gd.style.height = h + 'px'; gd.style.width = '100%'; vista3d.style.height = h + 'px';
+            if (em3d) {{ Plotly.Plots.resize(vista3d); return; }}
             Plotly.relayout(gd, {{height: h, width: window.innerWidth}}).then(resetarEixosPadrao);
         }}
         window.addEventListener('resize', ajustarTamanho);
