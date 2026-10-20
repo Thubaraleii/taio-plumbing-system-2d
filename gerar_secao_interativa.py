@@ -1200,6 +1200,7 @@ def main():
         var CX = {CX}, CY = {CY};
         var RANGE_MAPA_X = [{MAPA_RANGE_X[0]}, {MAPA_RANGE_X[1]}], RANGE_MAPA_Y = [{MAPA_RANGE_Y[0]}, {MAPA_RANGE_Y[1]}];
         var RANGE_SECAO_Y = [-100, 1150];
+        var EXAGERO = 0;  // 0 = automatico (preenche); >0 = exagero vertical (1 = escala real)
         var ANGULOS = [
         {angulos_js}
         ];
@@ -1590,10 +1591,18 @@ def main():
         // de OSM/campo/estrutura, duplo clique) -- sem isso o mapa/secao
         // "vazam" pra fora do recorte (rios/estradas OSM v e o piso artificial
         // do preenchimento do dique, bem mais fundo que a topografia real).
+        function rangeSecaoY() {{
+            var ax = gd._fullLayout && gd._fullLayout.xaxis2, ay = gd._fullLayout && gd._fullLayout.yaxis2;
+            if (!EXAGERO || !ax || !ay || !ax._length || !ay._length) return RANGE_SECAO_Y;
+            // 1 px em x = compKm*1000/larg metros; 1 px em y = (compKm*1000/larg)/EXAGERO metros
+            var span = ANGULOS[anguloAtual].compKm * 1000 * (ay._length / ax._length) / EXAGERO;
+            var centro = (RANGE_SECAO_Y[0] + RANGE_SECAO_Y[1]) / 2 - 100;
+            return [centro - span / 2, centro + span / 2];
+        }}
         function resetarEixosPadrao() {{
             Plotly.relayout(gd, {{
                 'xaxis.range': RANGE_MAPA_X, 'yaxis.range': RANGE_MAPA_Y,
-                'xaxis2.range': [0, ANGULOS[anguloAtual].compKm], 'yaxis2.range': RANGE_SECAO_Y,
+                'xaxis2.range': [0, ANGULOS[anguloAtual].compKm], 'yaxis2.range': rangeSecaoY(),
             }});
         }}
 
@@ -1771,6 +1780,21 @@ def main():
         }};
         grupo('Mapa', [selMapa]);
 
+        var Z3D_BASE = FIG3D ? FIG3D.layout.scene.aspectratio.z : 0;
+        var selExag = el('select', {{title: 'Exagero vertical (1x = escala real)'}});
+        [['0', 'Auto (preencher)'], ['1', '1× (real)'], ['2', '2×'], ['3', '3×'], ['5', '5×'], ['8', '8×'], ['10', '10×']].forEach(function(o) {{
+            selExag.appendChild(el('option', {{value: o[0], textContent: o[1]}}));
+        }});
+        selExag.onchange = function() {{
+            EXAGERO = parseFloat(selExag.value);
+            resetarEixosPadrao();
+            if (vista3dCriada && FIG3D) {{
+                var z0 = FIG3D.layout.scene.aspectratio;
+                Plotly.relayout(vista3d, {{'scene.aspectratio': {{x: z0.x, y: z0.y, z: EXAGERO ? Z3D_BASE * EXAGERO / 5 : Z3D_BASE}}}});
+            }}
+        }};
+        grupo('Exagero vertical', [selExag]);
+
         var camadas = [['OSM', alternarOSM, true]];
         if (INDICES_CAMPO) camadas.push(['Campo', alternarCampo, true]);
         if (INDICES_ESTRUTURA) camadas.push(['Estrutura', alternarEstrutura, true]);
@@ -1834,7 +1858,7 @@ def main():
                 btn3d.classList.toggle('ativo', em3d);
                 if (em3d) {{
                     vista3d.style.height = gd.style.height;
-                    if (!vista3dCriada) {{ Plotly.newPlot(vista3d, FIG3D.data, FIG3D.layout, {{responsive: true, displaylogo: false}}); vista3dCriada = true; }}
+                    if (!vista3dCriada) {{ if (EXAGERO) {{ var za = FIG3D.layout.scene.aspectratio; FIG3D.layout.scene.aspectratio = {{x: za.x, y: za.y, z: Z3D_BASE * EXAGERO / 5}}; }} Plotly.newPlot(vista3d, FIG3D.data, FIG3D.layout, {{responsive: true, displaylogo: false}}); vista3dCriada = true; }}
                     else {{ Plotly.Plots.resize(vista3d); }}
                 }} else {{
                     Plotly.Plots.resize(gd); setTimeout(resetarEixosPadrao, 60);
