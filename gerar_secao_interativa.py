@@ -514,13 +514,15 @@ def montar_fig_3d(tracados, elevacao, sill_geom, dique_geom, mx, my, mz):
         tilt = Z_REF_TILT + TREND_A * (xs - TREND_X0) + TREND_B * (ys - TREND_Y0)
         contatos = [terreno if m == 0 else np.minimum(tilt - PROFUNDIDADE_CAMADAS[m], terreno)
                     for m in range(len(PROFUNDIDADE_CAMADAS))]
+        dentro_sill = np.array([sill_geom.contains(Point(x, y)) for x, y in zip(xs, ys)])
+        dentro_dique = np.array([dique_geom.contains(Point(x, y)) for x, y in zip(xs, ys)])
+        base_sill = np.minimum(contatos[1], terreno - ESPESSURA_MINIMA_SILL)
+        # "erase" do sedimentar: soleira ocupa terreno -> base (camadas acima somem); dique remove todas as camadas
+        contatos = [np.where(dentro_dique, np.nan, np.where(dentro_sill, np.minimum(c, base_sill), c)) for c in contatos]
         for k, nome in enumerate(NOMES_CAMADAS):
             add(nome, malha_cortina(xs, ys, contatos[k], contatos[k + 1]), CORES_CAMADAS[k])
         quat = np.where(terreno <= QUATERNARIO_LIMIAR, terreno, np.nan)
         add("Depósito quaternário", malha_cortina(xs, ys, quat, quat - QUATERNARIO_ESPESSURA), COR_QUATERNARIO)
-        dentro_sill = np.array([sill_geom.contains(Point(x, y)) for x, y in zip(xs, ys)])
-        dentro_dique = np.array([dique_geom.contains(Point(x, y)) for x, y in zip(xs, ys)])
-        base_sill = np.minimum(contatos[1], terreno - ESPESSURA_MINIMA_SILL)
         add("Soleira", malha_cortina(xs, ys, np.where(dentro_sill, terreno, np.nan), base_sill), COR_SILL)
         add("Dique", malha_cortina(xs, ys, np.where(dentro_dique, terreno, np.nan), np.full_like(terreno, -300.0)), COR_DIQUE)
         letra = info["nome"].split()[1]
