@@ -42,6 +42,9 @@ OSM_LUGARES_GEOJSON = BASE.parent / "2_Banco_de_Dados" / "saida_processada" / "o
 PONTOS_CAMPO_GPKG = (
     BASE.parent / "2_Banco_de_Dados" / "Unificação" / "GPKG_Novos" / "pontos_unificados_completo.gpkg"
 )
+GEOLOGIA_REGIONAL_GPKG = (
+    Path(__file__).resolve().parent.parent.parent / "2_Banco_de_Dados" / "dados_base" / "geologia_regional_sc.gpkg"
+)
 PONTOS_ESTRUTURAIS_GPKG = (
     BASE.parent / "2_Banco_de_Dados" / "Unificação" / "GPKG_Novos" / "nuvem_pontos_direcoes.gpkg"
 )
@@ -881,18 +884,60 @@ def main():
     # traces: o risco vertical fino em si, e um simbolo de falha (X --
     # duas barras cruzadas, convencao geologica padrao de simbolo de falha
     # em secao) desenhado numa altura fixa junto a cada linha.
+    # estruturas regionais da CPRM (falhas e fraturas, SIG SC 1:500.000) no recorte da secao
+    cprm_linhas = []  # (LineString, categoria 0=falha/1=fratura, hover)
+    if GEOLOGIA_REGIONAL_GPKG.exists():
+        gdf_cprm = gpd.read_file(GEOLOGIA_REGIONAL_GPKG, layer="estrutura")
+        gdf_cprm = gdf_cprm[gdf_cprm["categoria"].isin(["Falha", "Fratura"])]
+        janela_cprm = box(X_MIN - 3000, Y_MIN - 3000, X_MAX + 3000, Y_MAX + 3000)
+        for row in gdf_cprm.itertuples():
+            g = row.geometry.intersection(janela_cprm)
+            for parte in ([g] if g.geom_type == "LineString" else list(getattr(g, "geoms", []))):
+                if parte.geom_type == "LineString" and parte.length > 50:
+                    cprm_linhas.append((parte, 0 if row.categoria == "Falha" else 1,
+                                        f"<b>{row.categoria} (CPRM)</b><br>{row.tipo}<br>SIG SC 1:500.000"))
+    cprm_segmentos_js = ",".join(
+        "[%.0f,%.0f,%.0f,%.0f,%d]" % (a[0], a[1], b[0], b[1], cat)
+        for ln, cat, _ in cprm_linhas
+        for a, b in zip(list(ln.coords)[:-1], list(ln.coords)[1:])
+    )
+    print(f"  estruturas CPRM no recorte: {len(cprm_linhas)} linhas")
+
+    def cprm_cruzamentos(linha):
+        """[(km, categoria, hover)] -- onde a polilinha (tracado fixo) cruza cada estrutura CPRM."""
+        out = []
+        for ln, cat, hv in cprm_linhas:
+            inter = linha.intersection(ln)
+            for pt in ([inter] if inter.geom_type == "Point" else list(getattr(inter, "geoms", []))):
+                if pt.geom_type == "Point" and not pt.is_empty:
+                    out.append((linha.project(pt) / 1000, cat, hv))
+        return sorted(out)
+
     idx_estrutural_risco = None
     idx_estrutural_simbolo = None
-    if estrutural_dados_secao:
+    idx_estr_extra = []  # halos (branco) e a trace de fraturas CPRM
+    if estrutural_dados_secao or cprm_linhas:
+        # halos brancos por baixo (linhas pretas ficam legiveis no fundo cinza-escuro)
+        for larg in (6.8, 6.0, 5.4):
+            idx_estr_extra.append(len(fig.data))
+            fig.add_trace(go.Scatter(
+                x=[], y=[], mode="lines", line=dict(color="#FFFFFF", width=larg),
+                showlegend=False, visible=False, hoverinfo="skip",
+            ), row=1, col=2)
+        idx_estr_extra.append(len(fig.data))
+        fig.add_trace(go.Scatter(
+            x=[], y=[], mode="lines", line=dict(color="#000000", width=1.8, dash="dash"),
+            name="Fratura (CPRM)", showlegend=True, visible=False, hoverinfo="text", legendgroup="estrutural",
+        ), row=1, col=2)
         idx_estrutural_risco = len(fig.data)
         fig.add_trace(go.Scatter(
-            x=[], y=[], mode="lines", line=dict(color="#FF8A7A", width=1.6),
-            name="Falha/Fratura", showlegend=True, visible=False,
+            x=[], y=[], mode="lines", line=dict(color="#000000", width=2.8),
+            name="Falha (campo/CPRM)", showlegend=True, visible=False,
             hoverinfo="text", legendgroup="estrutural",
         ), row=1, col=2)
         idx_estrutural_simbolo = len(fig.data)
         fig.add_trace(go.Scatter(
-            x=[], y=[], mode="lines", line=dict(color="#FFFFFF", width=1.8),
+            x=[], y=[], mode="lines", line=dict(color="#000000", width=1.8),
             showlegend=False, visible=False, hoverinfo="none", legendgroup="estrutural",
         ), row=1, col=2)
 
@@ -1018,17 +1063,30 @@ def main():
             topo_em = lambda x: float(np.interp(x, xk, yk))
             ax = dict(xaxis=f"x{eixo}", yaxis=f"y{eixo}", visible=False, showlegend=False)
             est = projetar_km(info["linha"], [(0, x, y, h) for x, y, h in estrutural_dados_secao], LIMIAR_PIN_FIXO_M)
-            if est:
+            cprm_b = cprm_cruzamentos(info["linha"])
+            falhas = [(km, h) for km, h in ((km, it[3]) for km, it in est)] + [(km, hv) for km, c, hv in cprm_b if c == 0]
+            fraturas = [(km, hv) for km, c, hv in cprm_b if c == 1]
+            for pontos_b, dash_b, larg_b, txt_b in ((falhas, None, 2.8, "falha"), (fraturas, "dash", 1.8, "fratura")):
+                if not pontos_b:
+                    continue
                 lx, ly = [], []
-                for km, it in est:
+                for km, _ in pontos_b:
                     lx += [km, km, None]; ly += [-100, topo_em(km), None]
                 emp_cat["estrutura"].append(len(fig.data))
-                fig.add_trace(go.Scatter(x=lx, y=ly, mode="lines", line=dict(color="#FF8A7A", width=2),
+                fig.add_trace(go.Scatter(x=lx, y=ly, mode="lines", line=dict(color="#FFFFFF", width=larg_b + 3),
                                          hoverinfo="skip", **ax))
                 emp_cat["estrutura"].append(len(fig.data))
-                fig.add_trace(go.Scatter(x=[km for km, _ in est], y=[(topo_em(km) - 100) / 2 for km, _ in est], mode="markers",
-                                         marker=dict(symbol="x", size=10, color="#FFFFFF", line=dict(color="#FF8A7A", width=1.5)),
-                                         hovertext=[it[3] for _, it in est], hoverinfo="text", **ax))
+                fig.add_trace(go.Scatter(x=lx, y=ly, mode="lines", line=dict(color="#000000", width=larg_b, dash=dash_b),
+                                         hoverinfo="skip", **ax))
+                if txt_b == "falha":
+                    emp_cat["estrutura"].append(len(fig.data))
+                    fig.add_trace(go.Scatter(x=[km for km, _ in pontos_b], y=[(topo_em(km) - 100) / 2 for km, _ in pontos_b],
+                                             mode="markers", marker=dict(symbol="x", size=13, color="#FFFFFF"),
+                                             hoverinfo="skip", **ax))
+                    emp_cat["estrutura"].append(len(fig.data))
+                    fig.add_trace(go.Scatter(x=[km for km, _ in pontos_b], y=[(topo_em(km) - 100) / 2 for km, _ in pontos_b],
+                                             mode="markers", marker=dict(symbol="x", size=9, color="#000000"),
+                                             hovertext=[h for _, h in pontos_b], hoverinfo="text", **ax))
             for cat, dados, tam in (("campo", campo_dados_secao, 7), ("geoq", geoq_dados_secao, 10)):
                 pts = projetar_km(info["linha"], dados, LIMIAR_PIN_FIXO_M)
                 if pts:
@@ -1155,7 +1213,8 @@ def main():
                     out.append("{x:%.3f,%s}" % (info["linha"].project(pt) / 1000, extra(it)))
             return "[" + ",".join(out) + "]"
         com_cor = lambda it: "nome:%r,cor:%r,hover:%r" % (str(it[0]), it[3], it[4])
-        return ", fixa:1, lug:%s, campo:%s, geoq:%s, estr:%s" % (
+        cprm_js = "[" + ",".join("{x:%.3f,c:%d,hover:%r}" % (km, c, hv) for km, c, hv in cprm_cruzamentos(info["linha"])) + "]"
+        return ", fixa:1, cprm:" + cprm_js + ", lug:%s, campo:%s, geoq:%s, estr:%s" % (
             lista(localidades_dados, 2000.0, lambda it: "nome:%r" % str(it[0])),
             lista(campo_dados_secao, LIMIAR_PIN_FIXO_M, com_cor),
             lista(geoq_dados_secao, LIMIAR_PIN_FIXO_M, com_cor),
@@ -1232,6 +1291,7 @@ def main():
         var PONTOS_CAMPO_SECAO = [{campo_js}];
         var PONTOS_GEOQ_SECAO = [{geoq_js}];
         var ESTRUTURAL_SECAO = [{estrutural_js}];
+        var CPRM_SEGMENTOS = [{cprm_segmentos_js}];
         var PINS_RIOS = [
         {pins_rios_js}
         ];
@@ -1268,7 +1328,8 @@ def main():
         var IDX_ANOTACOES_SUBTITULO = [0, 1];
         var INDICES_OSM = [{",".join(str(i) for i in range(idx_osm_inicio, idx_osm_fim + 1))}];
         var INDICES_CAMPO = {f"[{idx_pontos_campo},{idx_campo_pin_linha},{idx_campo_pin_marcador}]" if idx_pontos_campo is not None else "null"};
-        var INDICES_ESTRUTURA = {f"[{idx_estrutural_risco},{idx_estrutural_simbolo}]" if idx_estrutural_risco is not None else "null"};
+        var INDICES_ESTRUTURA = {f"[{idx_estrutural_risco},{idx_estrutural_simbolo},{','.join(str(i) for i in idx_estr_extra)}]" if idx_estrutural_risco is not None else "null"};
+        var IDX_ESTR_EXTRA = {idx_estr_extra};
         var INDICES_GEOQ = {f"[{idx_geoq},{idx_geoq_pin_linha},{idx_geoq_pin_marcador}]" if idx_geoq is not None else "null"};
         var EMPILHADO = [{",".join("{eixo:%d,ini:%d,n:%d,ann:%d,d0:%.4f,d1:%.4f}" % e for e in empilhado)}];
         var EMP_CAT = {json.dumps(emp_cat)};
@@ -1311,14 +1372,6 @@ def main():
             }});
             Plotly.relayout(gd, patch);
             Plotly.restyle(gd, {{'line.color': t.texto}}, [IDX_TRACE_TERRENO]);
-            var corRisco = nome === 'claro' ? '#A01E10' : '#FF8A7A', corSimb = nome === 'claro' ? '#1B1B24' : '#FFFFFF';
-            if (INDICES_ESTRUTURA) {{
-                Plotly.restyle(gd, {{'line.color': corRisco}}, [INDICES_ESTRUTURA[0]]);
-                Plotly.restyle(gd, {{'line.color': corSimb}}, [INDICES_ESTRUTURA[1]]);
-            }}
-            (EMP_CAT.estrutura || []).forEach(function(i, k) {{
-                Plotly.restyle(gd, k % 2 === 0 ? {{'line.color': corRisco}} : {{'marker.color': corSimb, 'marker.line.color': corRisco}}, [i]);
-            }});
             // rotulos dos pins (nome da localidade/rio/estrada na secao) tambem
             // tem cor propria fixa na criacao -- sem isso ficavam ilegiveis no
             // tema claro (texto claro sobre fundo claro).
@@ -1567,6 +1620,23 @@ def main():
             var info = ANGULOS[a];
             var xs = [], ys = [], hovers = [];
             var xsSimbolo = [], ysSimbolo = [];
+            var xsF = [], ysF = [], hoversF = [];  // fraturas CPRM (tracejado, sem simbolo)
+            function addFalha(xKm, hover) {{
+                var yT = interpolarElevacao(xKm);
+                if (xs.length > 0) {{ xs.push(NaN); ys.push(NaN); hovers.push(''); }}
+                xs.push(xKm, xKm); ys.push(Y_MIN_SECAO, yT); hovers.push(hover, hover);
+                var yC = yT - 150;
+                if (podeSimbolo(xKm)) {{
+                    adicionarMeiaSeta(xsSimbolo, ysSimbolo, xKm - GAP_SIMBOLO_KM,
+                        yC - OFFSET_SIMBOLO_M / 2, yC - OFFSET_SIMBOLO_M / 2 + ALTURA_SIMBOLO_M, -1);
+                    adicionarMeiaSeta(xsSimbolo, ysSimbolo, xKm + GAP_SIMBOLO_KM,
+                        yC + OFFSET_SIMBOLO_M / 2, yC + OFFSET_SIMBOLO_M / 2 - ALTURA_SIMBOLO_M, 1);
+                }}
+            }}
+            function addFratura(xKm, hover) {{
+                if (xsF.length > 0) {{ xsF.push(NaN); ysF.push(NaN); hoversF.push(''); }}
+                xsF.push(xKm, xKm); ysF.push(Y_MIN_SECAO, interpolarElevacao(xKm)); hoversF.push(hover, hover);
+            }}
             var simbolosX = [];  // so 1 setinha por trecho de 300 m (risco continua em todos)
             function podeSimbolo(x) {{
                 for (var q = 0; q < simbolosX.length; q++) if (Math.abs(x - simbolosX[q]) < 0.3) return false;
@@ -1585,6 +1655,25 @@ def main():
                         yCentro + OFFSET_SIMBOLO_M / 2, yCentro + OFFSET_SIMBOLO_M / 2 - ALTURA_SIMBOLO_M, 1);
                 }}
             }});
+            // estruturas regionais da CPRM: cruzamento exato linha de corte x segmento
+            if (info.fixa) {{
+                (info.cprm || []).forEach(function(q) {{ if (q.c === 0) addFalha(q.x, q.hover); else addFratura(q.x, q.hover); }});
+            }} else {{
+                var ox = CX + offsetT * info.px, oy = CY + offsetT * info.py;
+                for (var si = 0; si < CPRM_SEGMENTOS.length; si++) {{
+                    var sg = CPRM_SEGMENTOS[si], ex = sg[2] - sg[0], ey = sg[3] - sg[1];
+                    var den = ex * info.dy - ey * info.dx;           // e x d
+                    if (Math.abs(den) < 1e-9) continue;
+                    var ax = sg[0] - ox, ay = sg[1] - oy;             // A - O
+                    var u = -(ax * info.dy - ay * info.dx) / den;     // ((O-A) x d) / (e x d)
+                    if (u < 0 || u > 1) continue;
+                    var sdist = (ax * ey - ay * ex) / (info.dx * ey - info.dy * ex);  // ((A-O) x e) / (d x e)
+                    var km = (sdist - info.s0) / 1000;
+                    if (km < 0 || km > info.compKm) continue;
+                    var hv = sg[4] === 0 ? '<b>Falha (CPRM)</b><br>SIG SC 1:500.000' : '<b>Fratura (CPRM)</b><br>SIG SC 1:500.000';
+                    if (sg[4] === 0) addFalha(km, hv); else addFratura(km, hv);
+                }}
+            }}
             (info.fixa ? [] : ESTRUTURAL_SECAO).forEach(function(pt) {{
                 var vx = pt.x - CX, vy = pt.y - CY;
                 var s = vx * info.dx + vy * info.dy;
@@ -1615,10 +1704,10 @@ def main():
                     }}
                 }}
             }});
-            var temSimb = IDX_ESTRUTURAL_SIMBOLO !== null;
-            var upd = temSimb ? {{x: [xs, xsSimbolo], y: [ys, ysSimbolo], hovertext: [hovers, []]}}
-                              : {{x: [xs], y: [ys], hovertext: [hovers]}};
-            var idxs = temSimb ? [IDX_ESTRUTURAL_RISCO, IDX_ESTRUTURAL_SIMBOLO] : [IDX_ESTRUTURAL_RISCO];
+            // ordem: risco, simbolo, halo-risco, halo-simbolo, halo-fratura, fratura
+            var upd = {{x: [xs, xsSimbolo, xs, xsSimbolo, xsF, xsF], y: [ys, ysSimbolo, ys, ysSimbolo, ysF, ysF],
+                       hovertext: [hovers, [], [], [], [], hoversF]}};
+            var idxs = [IDX_ESTRUTURAL_RISCO, IDX_ESTRUTURAL_SIMBOLO].concat(IDX_ESTR_EXTRA);
             if (junto) return {{upd: upd, idx: idxs}};
             Plotly.restyle(gd, upd, idxs);
         }}
