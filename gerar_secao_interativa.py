@@ -919,12 +919,12 @@ def main():
     if estrutural_dados_secao or cprm_linhas:
         idx_estr_extra.append(len(fig.data))
         fig.add_trace(go.Scatter(
-            x=[], y=[], mode="lines", line=dict(color="#E8402F", width=2.4),
+            x=[], y=[], mode="lines", line=dict(color="#2563EB", width=2.4),
             name="Falha (CPRM)", showlegend=True, visible=False, hoverinfo="text", legendgroup="estrutural",
         ), row=1, col=2)
         idx_estr_extra.append(len(fig.data))
         fig.add_trace(go.Scatter(
-            x=[], y=[], mode="lines", line=dict(color="#E8402F", width=1.6, dash="dash"),
+            x=[], y=[], mode="lines", line=dict(color="#D81B73", width=1.6, dash="dash"),
             name="Fratura (CPRM)", showlegend=True, visible=False, hoverinfo="text", legendgroup="estrutural",
         ), row=1, col=2)
         idx_estrutural_risco = len(fig.data)
@@ -1066,8 +1066,8 @@ def main():
             falhas_cprm = [(km, hv) for km, c, hv in cprm_b if c == 0]
             fraturas_cprm = [(km, hv) for km, c, hv in cprm_b if c == 1]
             for pontos_b, cor_b, dash_b, larg_b, com_x in ((falhas_campo, "#000000", None, 2.4, True),
-                                                           (falhas_cprm, "#E8402F", None, 2.4, True),
-                                                           (fraturas_cprm, "#E8402F", "dash", 1.6, False)):
+                                                           (falhas_cprm, "#2563EB", None, 2.4, True),
+                                                           (fraturas_cprm, "#D81B73", "dash", 1.6, False)):
                 if not pontos_b:
                     continue
                 lx, ly = [], []
