@@ -359,7 +359,29 @@ def montar_tracados_fixos():
     return saida
 
 
+def refinar_amostras(xs, ys, s_vals, *geoms):
+    """Diques/soleiras estreitos (dezenas de metros) escapam de uma amostragem de ~100 m: acrescenta
+    amostras logo antes/depois de cada trecho da linha que entra ou sai de um corpo."""
+    linha = LineString(zip(xs, ys))
+    d = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(xs), np.diff(ys)))])
+    extras = []
+    for g in geoms:
+        inter = linha.intersection(g)
+        for parte in ([inter] if inter.geom_type == "LineString" else list(getattr(inter, "geoms", []))):
+            if parte.geom_type != "LineString" or parte.is_empty:
+                continue
+            for ponto in (parte.coords[0], parte.coords[-1]):
+                e = linha.project(Point(ponto[0], ponto[1]))
+                extras += [e - 0.5, e + 0.5]
+    if not extras:
+        return xs, ys, s_vals
+    dn = np.unique(np.concatenate([d, np.clip(extras, 0.0, d[-1])]))
+    pts = [linha.interpolate(v) for v in dn]
+    return np.array([q.x for q in pts]), np.array([q.y for q in pts]), s_vals[0] + dn
+
+
 def amostrar_xy(xs, ys, s_vals, elevacao, sill_geom, dique_geom):
+    xs, ys, s_vals = refinar_amostras(xs, ys, s_vals, sill_geom, dique_geom)
     dists = (s_vals - s_vals[0]) / 1000
     terreno = np.array([elevacao(x, y) for x, y in zip(xs, ys)])
     dentro_sill = np.array([sill_geom.contains(Point(x, y)) for x, y in zip(xs, ys)])
@@ -487,7 +509,7 @@ def montar_fig_3d(tracados, elevacao, sill_geom, dique_geom, mx, my, mz):
         vistos.add(nome)
 
     for info in tracados:
-        xs, ys = info["xs"], info["ys"]
+        xs, ys, _ = refinar_amostras(info["xs"], info["ys"], info["s_vals"], sill_geom, dique_geom)
         terreno = np.array([elevacao(x, y) for x, y in zip(xs, ys)])
         tilt = Z_REF_TILT + TREND_A * (xs - TREND_X0) + TREND_B * (ys - TREND_Y0)
         contatos = [terreno if m == 0 else np.minimum(tilt - PROFUNDIDADE_CAMADAS[m], terreno)
