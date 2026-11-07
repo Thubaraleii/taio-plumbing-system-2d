@@ -868,7 +868,7 @@ def main():
             fig.add_trace(go.Scatter(x=x, y=y, mode="lines", line=dict(color=MARCA_CINZA_CLARO, width=1.5), showlegend=False), row=1, col=2)
         else:
             fig.add_trace(go.Scatter(
-                x=x, y=y, mode="lines", line=dict(width=0), fill="toself",
+                x=x, y=y, mode="lines", line=dict(width=2.2 if chave == "dique" else 0, color=CORES_TRACES[chave]), fill="toself",
                 fillcolor=CORES_TRACES[chave], name=NOMES_TRACES[chave], legendrank=LEGENDRANK_TRACES[chave],
             ), row=1, col=2)
 
@@ -1007,7 +1007,7 @@ def main():
                                              showlegend=False, visible=False, hoverinfo="none",
                                              xaxis=f"x{eixo}", yaxis=f"y{eixo}"))
                 else:
-                    fig.add_trace(go.Scatter(x=x, y=y, mode="lines", line=dict(width=0), fill="toself",
+                    fig.add_trace(go.Scatter(x=x, y=y, mode="lines", line=dict(width=2.2 if chave == "dique" else 0, color=CORES_TRACES[chave]), fill="toself",
                                              fillcolor=CORES_TRACES[chave], name=NOMES_TRACES[chave], showlegend=False,
                                              visible=False, hoverinfo="name", xaxis=f"x{eixo}", yaxis=f"y{eixo}"))
             # elementos de cada banda (estrutura / campo / geoquimica / OSM), por categoria, escondidos
