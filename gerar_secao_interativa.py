@@ -886,13 +886,13 @@ def main():
     if estrutural_dados_secao:
         idx_estrutural_risco = len(fig.data)
         fig.add_trace(go.Scatter(
-            x=[], y=[], mode="lines", line=dict(color="black", width=1),
+            x=[], y=[], mode="lines", line=dict(color="#FF8A7A", width=1.6),
             name="Falha/Fratura", showlegend=True, visible=False,
             hoverinfo="text", legendgroup="estrutural",
         ), row=1, col=2)
         idx_estrutural_simbolo = len(fig.data)
         fig.add_trace(go.Scatter(
-            x=[], y=[], mode="lines", line=dict(color="black", width=1.2),
+            x=[], y=[], mode="lines", line=dict(color="#FFFFFF", width=1.8),
             showlegend=False, visible=False, hoverinfo="none", legendgroup="estrutural",
         ), row=1, col=2)
 
@@ -1023,11 +1023,11 @@ def main():
                 for km, it in est:
                     lx += [km, km, None]; ly += [-100, topo_em(km), None]
                 emp_cat["estrutura"].append(len(fig.data))
-                fig.add_trace(go.Scatter(x=lx, y=ly, mode="lines", line=dict(color="black", width=1.5),
+                fig.add_trace(go.Scatter(x=lx, y=ly, mode="lines", line=dict(color="#FF8A7A", width=2),
                                          hoverinfo="skip", **ax))
                 emp_cat["estrutura"].append(len(fig.data))
-                fig.add_trace(go.Scatter(x=[km for km, _ in est], y=[topo_em(km) - 150 for km, _ in est], mode="markers",
-                                         marker=dict(symbol="x", size=9, color="black"),
+                fig.add_trace(go.Scatter(x=[km for km, _ in est], y=[(topo_em(km) - 100) / 2 for km, _ in est], mode="markers",
+                                         marker=dict(symbol="x", size=10, color="#FFFFFF", line=dict(color="#FF8A7A", width=1.5)),
                                          hovertext=[it[3] for _, it in est], hoverinfo="text", **ax))
             for cat, dados, tam in (("campo", campo_dados_secao, 7), ("geoq", geoq_dados_secao, 10)):
                 pts = projetar_km(info["linha"], dados, LIMIAR_PIN_FIXO_M)
@@ -1311,6 +1311,14 @@ def main():
             }});
             Plotly.relayout(gd, patch);
             Plotly.restyle(gd, {{'line.color': t.texto}}, [IDX_TRACE_TERRENO]);
+            var corRisco = nome === 'claro' ? '#A01E10' : '#FF8A7A', corSimb = nome === 'claro' ? '#1B1B24' : '#FFFFFF';
+            if (INDICES_ESTRUTURA) {{
+                Plotly.restyle(gd, {{'line.color': corRisco}}, [INDICES_ESTRUTURA[0]]);
+                Plotly.restyle(gd, {{'line.color': corSimb}}, [INDICES_ESTRUTURA[1]]);
+            }}
+            (EMP_CAT.estrutura || []).forEach(function(i, k) {{
+                Plotly.restyle(gd, k % 2 === 0 ? {{'line.color': corRisco}} : {{'marker.color': corSimb, 'marker.line.color': corRisco}}, [i]);
+            }});
             // rotulos dos pins (nome da localidade/rio/estrada na secao) tambem
             // tem cor propria fixa na criacao -- sem isso ficavam ilegiveis no
             // tema claro (texto claro sobre fundo claro).
@@ -1328,13 +1336,18 @@ def main():
         // no modo empilhado os traces da secao normal (eixo x2) ficam sempre escondidos; so o mapa (x1) liga/desliga
         function setVisCamada(indices, v) {{
             var alvo = modoEmpilhado ? indices.filter(function(i) {{ return gd.data[i].xaxis !== 'x2'; }}) : indices;
-            if (alvo.length) Plotly.restyle(gd, {{visible: v}}, alvo);
+            // visibilidade + eixos padrao numa unica chamada (1 redraw em vez de 2)
+            if (alvo.length) Plotly.update(gd, {{visible: v}}, patchEixosPadrao(), alvo);
+        }}
+        function refrescarPins() {{
+            if (!modoEmpilhado) atualizarPins(anguloAtual, gd.layout.sliders[0].active);
         }}
 
         var osmAtivo = false;
         function alternarOSM() {{
             osmAtivo = !osmAtivo;
             setVisCamada(INDICES_OSM, osmAtivo);
+            if (osmAtivo) refrescarPins();
         }}
 
         var campoAtivo = false;
@@ -1342,21 +1355,26 @@ def main():
             if (!INDICES_CAMPO) return;
             campoAtivo = !campoAtivo;
             setVisCamada(INDICES_CAMPO, campoAtivo);
+            if (campoAtivo) refrescarPins();
         }}
 
         var estruturaAtiva = false;
         function alternarEstrutura() {{
             if (!INDICES_ESTRUTURA) return;
             estruturaAtiva = !estruturaAtiva;
+            if (estruturaAtiva && !modoEmpilhado) {{
+                // dados da posicao atual + visibilidade + eixos: tudo em UM redraw
+                var pAtual = gd.layout.sliders[0].active;
+                var r = atualizarEstrutural(anguloAtual, ANGULOS[anguloAtual].t[pAtual], true);
+                var upd = r.upd; upd.visible = r.idx.map(function() {{ return true; }});
+                Plotly.update(gd, upd, patchEixosPadrao(), r.idx);
+                return;
+            }}
             setVisCamada(INDICES_ESTRUTURA, estruturaAtiva);
             // recalcula pra posicao/angulo ATUAL do corte -- sem isso o simbolo
             // so refletia a ultima vez que o slider/angulo mudou (podia ficar
             // desatualizado se o usuario ligar Estrutura depois de mexer nisso
             // com ela desligada, ou nunca ter tido dado calculado ainda).
-            if (estruturaAtiva) {{
-                var p = gd.layout.sliders[0].active;
-                atualizarEstrutural(anguloAtual, ANGULOS[anguloAtual].t[p]);
-            }}
         }}
 
         var geoquimicaAtiva = false;
@@ -1364,6 +1382,7 @@ def main():
             if (!INDICES_GEOQ) return;
             geoquimicaAtiva = !geoquimicaAtiva;
             setVisCamada(INDICES_GEOQ, geoquimicaAtiva);
+            if (geoquimicaAtiva) refrescarPins();
         }}
 
         // elevacao real (interpolada) do terreno numa distancia x (km) do
@@ -1452,6 +1471,7 @@ def main():
         // escalonadas JUNTAS (localidade+rio+estrada perto uma da outra
         // tambem colidem no grafico), depois cada tipo e restilizado separado.
         function atualizarPins(a, p) {{
+            if (!(osmAtivo || campoAtivo || geoquimicaAtiva)) return;
             var info = ANGULOS[a];
             var offsetT = info.t[p];
             var lugares = [];
@@ -1542,7 +1562,8 @@ def main():
             ys.push(NaN, y1, y1 + dirYFarpa * ALTURA_FARPA_M);
         }}
 
-        function atualizarEstrutural(a, offsetT) {{
+        function atualizarEstrutural(a, offsetT, junto) {{
+            if (!junto && !estruturaAtiva) return;
             var info = ANGULOS[a];
             var xs = [], ys = [], hovers = [];
             var xsSimbolo = [], ysSimbolo = [];
@@ -1594,12 +1615,12 @@ def main():
                     }}
                 }}
             }});
-            if (IDX_ESTRUTURAL_SIMBOLO !== null) {{
-                Plotly.restyle(gd, {{x: [xs, xsSimbolo], y: [ys, ysSimbolo], hovertext: [hovers, []]}},
-                               [IDX_ESTRUTURAL_RISCO, IDX_ESTRUTURAL_SIMBOLO]);
-            }} else {{
-                Plotly.restyle(gd, {{x: [xs], y: [ys], hovertext: [hovers]}}, [IDX_ESTRUTURAL_RISCO]);
-            }}
+            var temSimb = IDX_ESTRUTURAL_SIMBOLO !== null;
+            var upd = temSimb ? {{x: [xs, xsSimbolo], y: [ys, ysSimbolo], hovertext: [hovers, []]}}
+                              : {{x: [xs], y: [ys], hovertext: [hovers]}};
+            var idxs = temSimb ? [IDX_ESTRUTURAL_RISCO, IDX_ESTRUTURAL_SIMBOLO] : [IDX_ESTRUTURAL_RISCO];
+            if (junto) return {{upd: upd, idx: idxs}};
+            Plotly.restyle(gd, upd, idxs);
         }}
 
         function atualizarEspessuras(a, p) {{
@@ -1623,11 +1644,14 @@ def main():
             var centro = (RANGE_SECAO_Y[0] + RANGE_SECAO_Y[1]) / 2 - 100;
             return [centro - span / 2, centro + span / 2];
         }}
-        function resetarEixosPadrao() {{
-            Plotly.relayout(gd, {{
+        function patchEixosPadrao() {{
+            return {{
                 'xaxis.range': RANGE_MAPA_X, 'yaxis.range': RANGE_MAPA_Y,
                 'xaxis2.range': [0, ANGULOS[anguloAtual].compKm], 'yaxis2.range': rangeSecaoY(),
-            }});
+            }};
+        }}
+        function resetarEixosPadrao() {{
+            Plotly.relayout(gd, patchEixosPadrao());
         }}
 
         // forca o estado inicial (posicao central) -- o slider as vezes
@@ -1662,14 +1686,16 @@ def main():
         }}
         // modo empilhado: as camadas (OSM/campo/estrutura/geoquimica) valem nas 4 bandas tambem
         function aplicarVisEmpilhado() {{
+            var ids = [], vis = [];
             Object.keys(EMP_CAT).forEach(function(cat) {{
-                if (EMP_CAT[cat].length) Plotly.restyle(gd, {{visible: modoEmpilhado && visCamada(cat)}}, EMP_CAT[cat]);
+                var v = modoEmpilhado && visCamada(cat);
+                EMP_CAT[cat].forEach(function(i) {{ ids.push(i); vis.push(v); }});
             }});
+            if (ids.length) Plotly.restyle(gd, {{visible: vis}}, ids);
         }}
         function aposToggleCamada() {{
             if (modoEmpilhado) {{
-                Plotly.restyle(gd, {{visible: false}}, idxPrincipalX2());  // o toggle religou os traces da secao normal
-                aplicarVisEmpilhado();
+                aplicarVisEmpilhado();  // (os traces da secao normal ficam escondidos: setVisCamada ja os filtra)
             }}
         }}
         function mostrarEmpilhado(ligar) {{
@@ -1696,17 +1722,18 @@ def main():
                 if (ligados.length) Plotly.restyle(gd, {{visible: true}}, ligados);
                 if (desligados.length) Plotly.restyle(gd, {{visible: false}}, desligados);
             }}
+            var todosIds = [];
             EMPILHADO.forEach(function(e) {{
                 var ids = []; for (var k = 0; k < e.n; k++) ids.push(e.ini + k);
-                Plotly.restyle(gd, {{visible: ligar}}, ids);
+                todosIds = todosIds.concat(ids);
                 patch['yaxis' + e.eixo + '.domain'] = ligar ? [e.d0, e.d1] : [0, 0.003];
                 patch['xaxis' + e.eixo + '.visible'] = ligar; patch['yaxis' + e.eixo + '.visible'] = ligar;
                 patch['annotations[' + e.ann + '].visible'] = ligar;
             }});
             if (MAPA_TRACADOS[1]) {{
-                var im = []; for (var k = 0; k < MAPA_TRACADOS[1]; k++) im.push(MAPA_TRACADOS[0] + k);
-                Plotly.restyle(gd, {{visible: ligar}}, im);
+                for (var k = 0; k < MAPA_TRACADOS[1]; k++) todosIds.push(MAPA_TRACADOS[0] + k);
             }}
+            if (todosIds.length) Plotly.restyle(gd, {{visible: ligar}}, todosIds);
             aplicarVisEmpilhado();
             Plotly.relayout(gd, patch);
         }}
@@ -1825,7 +1852,7 @@ def main():
         if (INDICES_GEOQ) camadas.push(['Geoquímica', alternarGeoquimica, true]);
         var grupoCamadas = grupo('Camadas', camadas.map(function(c) {{
             var b = el('button', {{textContent: c[0]}});
-            b.onclick = function() {{ c[1](); b.classList.toggle('ativo'); aposToggleCamada(); setTimeout(resetarEixosPadrao, 60); }};
+            b.onclick = function() {{ c[1](); b.classList.toggle('ativo'); aposToggleCamada(); }};
             return b;
         }}));
 
