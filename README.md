@@ -30,6 +30,12 @@ intrusivo de Taió. A seção é calculada ao longo de qualquer linha de corte s
 - **Soleira:** do terreno até o topo da Serra Alta (espessura mínima de 27 m); **dique:** coluna vertical até a base do modelo.
 - Corpos e unidades são definidos pelos polígonos da litologia atualizada; amostragem de 300 pontos por seção.
 
+## Idioma e navegação
+
+- **Idioma:** o botão **EN / PT**, ao lado do logotipo, alterna a interface entre português e inglês em tempo real (menus, legendas, dicas, popups, rótulos e textos 3D). A escolha é lembrada no navegador e acompanha os links entre as páginas (`?lang=en`).
+- **Hub:** o botão **← Hub** volta à página inicial do projeto, mantendo o idioma.
+- **Tradução:** feita no navegador por dicionário (`tps_i18n_dict.py`, embutido na página por `tps_i18n.py` ao gerar o HTML). Dados de origem em português (por exemplo, descrições de campo e nomes próprios de unidades) permanecem no idioma original.
+
 ## Uso
 
 Abra `secao_interativa.html` no navegador ou acesse a versão publicada. Use a barra superior para escolher a linha de corte; arraste o controle deslizante ou clique no mapa para deslocá-la.
