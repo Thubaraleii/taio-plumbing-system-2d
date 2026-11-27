@@ -2,6 +2,7 @@
 DICT: texto inteiro (apos trim). RX: regex (padrao, flags, substituicao com $1..). FRAG: substrings (aplicadas por ultimo)."""
 
 DICT = {
+    'Cota do fundo = relevo (Terrain Tiles) na boca − profundidade total. Unidades calibradas nos topos da planilha PMP/ANP (Irati, Palermo, Rio Bonito e base do Rio Bonito) para os poços do recorte que a planilha cobre; Teresina e Serra Alta não têm topo separado na fonte e seguem a tendência regional. Longe dos poços as superfícies são extrapoladas.': 'Bottom elevation = relief (Terrain Tiles) at the wellhead − total depth. Units calibrated to the tops in the PMP/ANP spreadsheet (Irati, Palermo, Rio Bonito and the base of Rio Bonito) for the cutout wells the spreadsheet covers; Teresina and Serra Alta have no separate top in the source and follow the regional trend. Far from the wells the surfaces are extrapolated.',
     # ---------------- comum ----------------
     "Criado por Afonso Henrique de Jesus": "Created by Afonso Henrique de Jesus",
     "Corte": "Cut", "Leste → Oeste": "East → West", "Oeste → Leste": "West → East", "Norte → Sul": "North → South", "Sul → Norte": "South → North",

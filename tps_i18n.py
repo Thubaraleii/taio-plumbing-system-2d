@@ -6,7 +6,7 @@ Uso (no fim de cada gerador, depois de salvar o HTML):
 
 O bloco injetado e autonomo (CSS + JS): adiciona, ao lado do logotipo, o botao de idioma (PT <-> EN) e o botao "Hub";
 traduz a interface em tempo real (nos de texto, atributos, legendas e hover do Plotly, popups do Leaflet e textos 3D)
-com um dicionario PT -> EN. O padrao e SEMPRE portugues; o ingles so vale na pagina aberta com ?lang=en (parametro repassado pelos links/hub).
+com um dicionario PT -> EN. A escolha fica em localStorage e viaja entre paginas pelo parametro ?lang=en.
 Idempotente: regravar substitui o bloco anterior.
 """
 import json
@@ -18,6 +18,11 @@ try:
 except ImportError:  # pragma: no cover
     DICT, FRAG, RX = {}, [], []
 
+try:
+    from tps_info import dados_info
+except ImportError:  # pragma: no cover
+    dados_info = None
+
 HUB_TPS = "https://tplumbingsystem.github.io/TPS_HUB/"
 HUB_ORIGINAL = "https://thubaraleii.github.io/TAIO-HUB/"
 INI, FIM = "<!--tps-i18n-->", "<!--/tps-i18n-->"
@@ -26,8 +31,9 @@ JS = r"""
 (function () {
   if (window.__tpsI18n) return; window.__tpsI18n = true;
   var CFG = __CFG__, DICT = __DICT__, FRAG = __FRAG__, RXS = __RX__.map(function (r) { return [new RegExp(r[0], r[1]), r[2]]; });
-  var qs = new URLSearchParams(location.search);
-  var lang = qs.get('lang') === 'en' ? 'en' : 'pt';  // padrao SEMPRE portugues
+  var qs = new URLSearchParams(location.search), stored = null;
+  try { stored = localStorage.getItem('tps_lang'); } catch (e) {}
+  var lang = qs.get('lang') || stored || 'pt'; if (lang !== 'en') lang = 'pt';
   var cache = {}, MISS = {};
   window.__i18nMiss = MISS;
   var PT_HINT = /[À-ÖØ-öø-ÿ]|\b(de|do|da|dos|das|para|com|sem|por|em|no|na|ao|ou|seção|mapa|camada)\b/i;
@@ -119,6 +125,7 @@ JS = r"""
   document.head.appendChild(st);
   var bLang = document.createElement('button'), bHub = null;
   function rotulos() {
+    if (bInfo) { bInfo.title = lang === 'en' ? 'References and terms of use' : 'Referências e termos de uso'; bInfo.setAttribute('aria-label', bInfo.title); }
     bLang.textContent = lang === 'en' ? 'PT' : 'EN'; bLang.title = lang === 'en' ? 'Mudar para português' : 'Switch to English';
     if (bHub) { bHub.textContent = '← Hub'; bHub.title = lang === 'en' ? 'Back to the hub' : 'Voltar ao hub'; }
   }
@@ -129,12 +136,59 @@ JS = r"""
     bHub.onclick = function () { var u = new URL(CFG.hub); if (lang === 'en') u.searchParams.set('lang', 'en'); location.href = u.toString(); };
     box.appendChild(bHub);
   }
+  // botao de informacoes: referencias, fontes de dados e termos de uso
+  var janela = null, aba = 'refs', bInfo = null;
+  function el(tag, cls, txt) { var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
+  function desenharInfo() {
+    if (!janela) return;
+    var I = CFG.info, en = lang === 'en', cx = el('div', 'tpsi-caixa');
+    cx.setAttribute('role', 'dialog'); cx.setAttribute('aria-modal', 'true');
+    var topo = el('div', 'tpsi-topo');
+    [['refs', en ? 'References' : 'Referências'], ['termos', en ? 'Terms of use' : 'Termos de uso']].forEach(function (a) {
+      var b = el('button', aba === a[0] ? 'tpsi-ativa' : '', a[1]);
+      b.onclick = function () { aba = a[0]; desenharInfo(); }; topo.appendChild(b);
+    });
+    var x = el('button', 'tpsi-fechar', '×'); x.title = en ? 'Close' : 'Fechar'; x.setAttribute('aria-label', x.title); x.onclick = fecharInfo; topo.appendChild(x);
+    cx.appendChild(topo);
+    var corpo = el('div', 'tpsi-corpo');
+    if (aba === 'refs') {
+      corpo.appendChild(el('h3', '', en ? 'Data sources' : 'Fontes de dados'));
+      var ul = el('ul'); I.fontes[en ? 'en' : 'pt'].forEach(function (f) { ul.appendChild(el('li', '', f)); }); corpo.appendChild(ul);
+      corpo.appendChild(el('h3', '', en ? 'References' : 'Referências'));
+      var ol = el('ol'); I.refs.forEach(function (r) { ol.appendChild(el('li', '', r)); }); corpo.appendChild(ol);
+    } else {
+      I.termos[en ? 'en' : 'pt'].forEach(function (t) {
+        corpo.appendChild(el('h3', '', t[0]));
+        corpo.appendChild(el('p', '', t[1].replace('{titulo}', en ? tr(T0) : T0).replace('{url}', location.origin + location.pathname)));
+      });
+    }
+    cx.appendChild(corpo); janela.textContent = ''; janela.appendChild(cx);
+  }
+  function teclaInfo(e) { if (e.key === 'Escape') fecharInfo(); }
+  function fecharInfo() { if (janela) { janela.remove(); janela = null; document.removeEventListener('keydown', teclaInfo); } }
+  function abrirInfo() {
+    if (janela) { fecharInfo(); return; }
+    janela = el('div', 'noi18n'); janela.id = 'tps-info';
+    janela.onclick = function (e) { if (e.target === janela) fecharInfo(); };
+    desenharInfo(); document.body.appendChild(janela); document.addEventListener('keydown', teclaInfo);
+  }
+  if (CFG.info) {
+    bInfo = el('button', '', 'ⓘ'); bInfo.onclick = abrirInfo; box.appendChild(bInfo);
+    var si = document.createElement('style');
+    si.textContent = '#tps-info{position:fixed;inset:0;z-index:2147483600;background:rgba(3,10,19,.72);display:flex;align-items:center;justify-content:center;padding:16px;font:400 13px/1.55 Inter,Montserrat,Arial,sans-serif}' +
+      '#tps-info .tpsi-caixa{background:#071729;color:#F1F5F9;border:1px solid ' + CFG.acc + ';border-radius:10px;width:min(720px,100%);max-height:min(80vh,100%);display:flex;flex-direction:column;overflow:hidden;text-align:left}' +
+      '#tps-info .tpsi-topo{display:flex;gap:6px;padding:10px 12px;border-bottom:1px solid ' + CFG.acc + '}' +
+      '#tps-info button{background:transparent;color:#F1F5F9;border:1px solid ' + CFG.acc + ';border-radius:6px;padding:5px 12px;font:600 12px Inter,Arial,sans-serif;cursor:pointer}' +
+      '#tps-info button.tpsi-ativa{background:' + CFG.acc + ';color:#071729}#tps-info .tpsi-fechar{margin-left:auto;font-size:16px;line-height:1}' +
+      '#tps-info .tpsi-corpo{overflow:auto;padding:6px 18px 18px}#tps-info h3{font-size:13px;margin:14px 0 6px;color:' + CFG.acc + '}' +
+      '#tps-info ul,#tps-info ol{margin:0;padding-left:20px}#tps-info li{margin-bottom:5px}#tps-info p{margin:0;overflow-wrap:anywhere}';
+    document.head.appendChild(si);
+  }
   function setLang(l) {
-    lang = l;
-    try { var u = new URL(location.href); if (l === 'en') u.searchParams.set('lang', 'en'); else u.searchParams.delete('lang'); history.replaceState(null, '', u.toString()); } catch (e) {}
+    lang = l; try { localStorage.setItem('tps_lang', l); } catch (e) {}
     document.documentElement.lang = l === 'en' ? 'en' : 'pt-br';
     if (l === 'en') walk(document.documentElement); else restaurar();
-    titulo(); plotlyTexto(); links(); rotulos();
+    titulo(); plotlyTexto(); links(); rotulos(); desenharInfo();
     try { window.dispatchEvent(new Event('tps-lang')); } catch (e) {}
   }
   var mo = new MutationObserver(function (muts) {
@@ -158,8 +212,8 @@ JS = r"""
 """
 
 
-def _bloco(hub, acc, right, top, css, anchor=None):
-    cfg = dict(hub=hub, acc=acc, right=right, top=top, css=css, anchor=anchor)
+def _bloco(hub, acc, right, top, css, anchor=None, info=None):
+    cfg = dict(hub=hub, acc=acc, right=right, top=top, css=css, anchor=anchor, info=info)
     js = (JS.replace("__CFG__", json.dumps(cfg, ensure_ascii=False))
             .replace("__DICT__", json.dumps(DICT, ensure_ascii=False))
             .replace("__FRAG__", json.dumps(FRAG, ensure_ascii=False))
@@ -173,7 +227,7 @@ def injetar(caminho, hub=HUB_TPS, acc="#13BBE6", right=72, top=10, css="", ancho
     t = p.read_text(encoding="utf-8")
     t = re.sub(re.escape(INI) + r".*?" + re.escape(FIM), "", t, flags=re.S)
     k = t.rfind("</body>")
-    bloco = _bloco(hub, acc, right, top, css, anchor)
+    bloco = _bloco(hub, acc, right, top, css, anchor, dados_info(p.name) if dados_info else None)
     t = (t[:k] + bloco + t[k:]) if k >= 0 else t + bloco
     p.write_text(t, encoding="utf-8")
     return p
